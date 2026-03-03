@@ -5,13 +5,18 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  query,
   serverTimestamp,
   updateDoc,
+  where,
 } from "firebase/firestore";
+
+const userCollectionByUid = (uid, collectionName) => collection(db, "users", uid, collectionName);
+const userDocByUid = (uid, collectionName, docId) => doc(db, "users", uid, collectionName, docId);
 
 export const addProduct = async (uid, productData) => {
   try {
-    const productosRef = collection(db, "negocios", uid, "productos");
+    const productosRef = userCollectionByUid(uid, "products");
 
     const docRef = await addDoc(productosRef, {
       ...productData,
@@ -28,7 +33,7 @@ export const addProduct = async (uid, productData) => {
 
 export const deleteProduct = async (uid, productId) => {
   try {
-    await deleteDoc(doc(db, "negocios", uid, "productos", productId));
+    await deleteDoc(userDocByUid(uid, "products", productId));
   } catch (error) {
     console.error("Error eliminando producto:", error);
     throw error;
@@ -41,7 +46,7 @@ export const updateInventoryCount = async (
   cantidadContada,
   factorConversion
 ) => {
-  const productRef = doc(db, "negocios", uid, "productos", productId);
+  const productRef = userDocByUid(uid, "products", productId);
   const stockBase = Number(cantidadContada) * Number(factorConversion || 1);
 
   await updateDoc(productRef, {
@@ -51,30 +56,25 @@ export const updateInventoryCount = async (
 };
 
 export const getProviderRouteProductIds = async (uid, proveedorRutaId) => {
-  const [businessSnapshot, rootSnapshot] = await Promise.all([
-    getDocs(collection(db, "negocios", uid, "proveedorProducto")),
-    getDocs(collection(db, "proveedorProducto")),
-  ]);
+  const snapshot = await getDocs(userCollectionByUid(uid, "proveedor_producto"));
 
-  const allRelations = [...businessSnapshot.docs, ...rootSnapshot.docs].map(
-    (relDoc) => relDoc.data()
-  );
+  const allRelations = snapshot.docs.map((relDoc) => relDoc.data());
 
   return allRelations
     .filter((rel) => {
       const relProveedorId = rel.proveedorRutaId || rel.proveedorId;
-      const isAvailable = rel.disponible !== false;
+      const isAvailable = rel.disponible !== false && rel.activo !== false;
       return relProveedorId === proveedorRutaId && isAvailable;
     })
-    .map((rel) => rel.productoId);
+    .map((rel) => rel.productoId || rel.productDocId);
 };
 
-export const getProviderRoutes = async () => {
-  const routesRef = collection(db, "proveedores");
+export const getProviderRoutes = async (uid) => {
+  const routesRef = query(userCollectionByUid(uid, "proveedores"), where("activo", "!=", false));
   const snapshot = await getDocs(routesRef);
 
   return snapshot.docs.map((routeDoc) => ({
     id: routeDoc.id,
     ...routeDoc.data(),
-  })).filter((route) => route.activo !== false);
+  }));
 };
