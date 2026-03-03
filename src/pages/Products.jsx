@@ -143,6 +143,15 @@ function Products() {
     }
   };
 
+  useEffect(() => {
+    const pack = Number(costoPack || 0);
+    const unidades = Number(unidadesPorInterna || 0);
+    if (pack <= 0 || unidades <= 0) return;
+
+    const unitarioCalculado = pack / unidades;
+    setCostoUnitario(unitarioCalculado.toFixed(2));
+  }, [costoPack, unidadesPorInterna]);
+
   const clearForm = () => {
     setNombre("");
     setMedidaBase("UN");
@@ -521,8 +530,12 @@ function Products() {
                     className="input-modern"
                     value={costoUnitario}
                     onChange={(e) => setCostoUnitario(e.target.value)}
+                    readOnly={Number(costoPack || 0) > 0 && Number(unidadesPorInterna || 0) > 0}
                     required
                   />
+                  {Number(costoPack || 0) > 0 && Number(unidadesPorInterna || 0) > 0 && (
+                    <small>Calculado automaticamente segun pack.</small>
+                  )}
                 </div>
 
                 <div className="input-group">

@@ -28,12 +28,16 @@ function RecibirPedidoPage() {
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [medidaEntrada, setMedidaEntrada] = useState("base");
   const [cantidad, setCantidad] = useState("");
+  const [cantidadBaseAdicional, setCantidadBaseAdicional] = useState("");
   const [costoTotal, setCostoTotal] = useState("");
   const [margen, setMargen] = useState("20");
   const [precioVentaUnidadManual, setPrecioVentaUnidadManual] = useState("");
   const [precioOriginal, setPrecioOriginal] = useState(0);
   const [showPriceConfirmModal, setShowPriceConfirmModal] = useState(false);
   const [pendingItemData, setPendingItemData] = useState(null);
+  const unidadesPorInternaActual = Number(
+    selectedProduct?.unidadesPorInterna ?? selectedProduct?.unidadesPorPack ?? 0
+  );
 
   useEffect(() => {
     const init = async () => {
@@ -43,12 +47,27 @@ function RecibirPedidoPage() {
     init();
   }, []);
 
+  const cantidadBaseActual = useMemo(() => {
+    const cantidadNum = Number(cantidad || 0);
+    const adicionalBase = Number(cantidadBaseAdicional || 0);
+    if (!selectedProduct) return cantidadNum;
+
+    const unidadesPorInterna = Number(
+      selectedProduct.unidadesPorInterna ?? selectedProduct.unidadesPorPack ?? 0
+    );
+
+    if (medidaEntrada === "interna" && unidadesPorInterna > 0) {
+      return cantidadNum * unidadesPorInterna + adicionalBase;
+    }
+    return cantidadNum + adicionalBase;
+  }, [selectedProduct, cantidad, medidaEntrada, cantidadBaseAdicional]);
+
   const costoUnitario = useMemo(() => {
-    const c = Number(cantidad);
+    const c = Number(cantidadBaseActual || 0);
     const t = Number(costoTotal);
     if (c <= 0 || t <= 0) return 0;
     return Number((t / c).toFixed(2));
-  }, [cantidad, costoTotal]);
+  }, [cantidadBaseActual, costoTotal]);
 
   const precioVentaUnidadCalculado = useMemo(() => {
     if (costoUnitario <= 0) return 0;
@@ -70,18 +89,7 @@ function RecibirPedidoPage() {
       (p.nombre || "").toLowerCase().includes(search.toLowerCase())
     );
   }, [search, supplierProducts]);
-  const previewCantidadBase = useMemo(() => {
-    if (!selectedProduct) return 0;
-    const cantidadNum = Number(cantidad || 0);
-    const unidadesPorInterna = Number(
-      selectedProduct.unidadesPorInterna ?? selectedProduct.unidadesPorPack ?? 0
-    );
-
-    if (medidaEntrada === "interna" && unidadesPorInterna > 0) {
-      return cantidadNum * unidadesPorInterna;
-    }
-    return cantidadNum;
-  }, [selectedProduct, cantidad, medidaEntrada]);
+  const previewCantidadBase = cantidadBaseActual;
   const previewGananciaTotal = useMemo(
     () => Number(gananciaUnidad || 0) * Number(previewCantidadBase || 0),
     [gananciaUnidad, previewCantidadBase]
@@ -152,11 +160,27 @@ function RecibirPedidoPage() {
     }
   };
 
+  const handleCantidadExtraChange = (value) => {
+    let extra = Number(value || 0);
+    if (!Number.isFinite(extra) || extra < 0) extra = 0;
+
+    if (medidaEntrada === "interna" && unidadesPorInternaActual > 0) {
+      const packsExtra = Math.floor(extra / unidadesPorInternaActual);
+      if (packsExtra > 0) {
+        setCantidad((prev) => String(Number(prev || 0) + packsExtra));
+      }
+      extra = extra % unidadesPorInternaActual;
+    }
+
+    setCantidadBaseAdicional(String(extra));
+  };
+
   const openProductModal = (product) => {
     const basePrice = Number(product.precioVentaBase ?? product.precioVenta ?? 0);
     setSelectedProduct(product);
     setMedidaEntrada("base");
     setCantidad("");
+    setCantidadBaseAdicional("");
     setCostoTotal("");
     setMargen("20");
     setPrecioOriginal(basePrice);
@@ -184,6 +208,7 @@ function RecibirPedidoPage() {
       medidaInterna: product.medidaInterna || null,
       medidaEntrada,
       cantidadIngresada,
+      cantidadBaseAdicional: Number(cantidadBaseAdicional || 0),
       cantidadBase,
       unidadesUltimaCompra: cantidadBase,
       unidadesPorInterna: unidadesPorInterna > 0 ? unidadesPorInterna : null,
@@ -223,8 +248,9 @@ function RecibirPedidoPage() {
     if (!selectedProduct) return;
 
     const cantidadNum = Number(cantidad);
+    const adicionalBase = Number(cantidadBaseAdicional || 0);
     const costoTotalNum = Number(costoTotal);
-    if (cantidadNum <= 0 || costoTotalNum <= 0 || costoUnitario <= 0) {
+    if (previewCantidadBase <= 0 || costoTotalNum <= 0 || costoUnitario <= 0) {
       alert("Completa cantidad y costo total validos");
       return;
     }
@@ -238,7 +264,9 @@ function RecibirPedidoPage() {
     }
 
     const cantidadBase =
-      medidaEntrada === "interna" ? cantidadNum * unidadesPorInterna : cantidadNum;
+      medidaEntrada === "interna"
+        ? cantidadNum * unidadesPorInterna + adicionalBase
+        : cantidadNum + adicionalBase;
     const proposedPrice = Number(precioVentaUnidad || 0);
     const originalPrice = Number(precioOriginal || 0);
 
@@ -418,24 +446,26 @@ function RecibirPedidoPage() {
               {medidaEntrada === "interna"
                 ? selectedProduct.medidaInterna || selectedProduct.medidaBase || "UN"
                 : selectedProduct.medidaBase || "UN"}
-            </strong>
+              </strong>
           </p>
-          {Number(selectedProduct.unidadesPorInterna ?? selectedProduct.unidadesPorPack ?? 0) >
-            0 &&
-            Number(cantidad || 0) > 0 && (
+          {medidaEntrada === "interna" && unidadesPorInternaActual > 0 && (
+            <p className="badge-info">
+              1 {selectedProduct.medidaInterna || "PACK"} = {unidadesPorInternaActual}{" "}
+              {selectedProduct.medidaBase || "UN"}
+            </p>
+          )}
+          {previewCantidadBase > 0 && (
             <p className="badge-info">
               Equivalente base:{" "}
-              {(
-                (medidaEntrada === "interna"
-                  ? Number(cantidad || 0) *
-                    Number(
-                      selectedProduct.unidadesPorInterna ??
-                        selectedProduct.unidadesPorPack ??
-                        0
-                    )
-                  : Number(cantidad || 0))
-              ).toFixed(2)}{" "}
+              {previewCantidadBase.toFixed(2)}{" "}
               {selectedProduct.medidaBase || "UN"}
+            </p>
+          )}
+          {medidaEntrada === "interna" && previewCantidadBase > 0 && (
+            <p className="badge-info">
+              {Number(cantidad || 0)} {selectedProduct.medidaInterna || "PACK"} +{" "}
+              {Number(cantidadBaseAdicional || 0)} {selectedProduct.medidaBase || "UN"} ={" "}
+              {previewCantidadBase.toFixed(2)} {selectedProduct.medidaBase || "UN"}
             </p>
           )}
           <div className="receive-form-grid">
@@ -449,6 +479,20 @@ function RecibirPedidoPage() {
                 onChange={(e) => setCantidad(e.target.value)}
               />
               <small>Ingresa la cantidad en la medida seleccionada.</small>
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="cantidad-base-adicional">UN adicionales</label>
+              <input
+                id="cantidad-base-adicional"
+                className="input-modern"
+                type="number"
+                value={cantidadBaseAdicional}
+                min="0"
+                step="1"
+                onChange={(e) => handleCantidadExtraChange(e.target.value)}
+              />
+              <small>Opcional. Se suma al equivalente base.</small>
             </div>
 
             <div className="input-group">
@@ -602,6 +646,8 @@ function RecibirPedidoPage() {
                     {item.medidaEntrada === "interna"
                       ? item.medidaInterna || item.medidaBase
                       : item.medidaBase}
+                    {Number(item.cantidadBaseAdicional || 0) > 0 &&
+                      ` + ${Number(item.cantidadBaseAdicional || 0).toFixed(2)} ${item.medidaBase}`}
                   </td>
                   <td>
                     {item.cantidadBase} {item.medidaBase}
@@ -642,6 +688,12 @@ function RecibirPedidoPage() {
                   <p>
                     <strong>Recibido:</strong> {item.cantidadBase} {item.medidaBase}
                   </p>
+                  {Number(item.cantidadBaseAdicional || 0) > 0 && (
+                    <p>
+                      <strong>Adicional:</strong> {Number(item.cantidadBaseAdicional || 0).toFixed(2)}{" "}
+                      {item.medidaBase}
+                    </p>
+                  )}
                   {equivalenciaInterna !== null && (
                     <p>
                       <strong>Equivalente:</strong> {equivalenciaInterna.toFixed(2)}{" "}

@@ -14,6 +14,12 @@ function SeccionDistribuidores({ producto }) {
   const [costoUnitario, setCostoUnitario] = useState("");
   const [costoPack, setCostoPack] = useState("");
   const [promedioEntrega, setPromedioEntrega] = useState("");
+  const unidadesPorInterna = Number(producto?.unidadesPorInterna ?? producto?.unidadesPorPack ?? 0);
+  const usaCostoUnitarioCalculado = Number(costoPack || 0) > 0 && unidadesPorInterna > 0;
+  const costoUnitarioCalculado = useMemo(() => {
+    if (!usaCostoUnitarioCalculado) return "";
+    return (Number(costoPack || 0) / unidadesPorInterna).toFixed(2);
+  }, [costoPack, unidadesPorInterna, usaCostoUnitarioCalculado]);
 
   const proveedoresMap = useMemo(() => {
     const map = {};
@@ -86,7 +92,10 @@ function SeccionDistribuidores({ producto }) {
       alert("Selecciona un distribuidor");
       return;
     }
-    if (Number(costoUnitario || 0) <= 0) {
+    const costoUnitarioFinal = Number(
+      usaCostoUnitarioCalculado ? costoUnitarioCalculado : costoUnitario
+    );
+    if (costoUnitarioFinal <= 0) {
       alert("Ingresa un costo unitario valido");
       return;
     }
@@ -96,7 +105,7 @@ function SeccionDistribuidores({ producto }) {
       productoId: producto.productoId || producto.id,
       proveedorId: selectedProveedorId,
       proveedorNombre: proveedoresMap[selectedProveedorId] || selectedProveedorId,
-      costoUnitario: Number(costoUnitario || 0),
+      costoUnitario: costoUnitarioFinal,
       costoPack: costoPack === "" ? null : Number(costoPack),
       promedioEntrega: promedioEntrega === "" ? null : Number(promedioEntrega),
       activo: true,
@@ -165,9 +174,13 @@ function SeccionDistribuidores({ producto }) {
               <input
                 className="input-modern"
                 type="number"
-                value={costoUnitario}
+                value={usaCostoUnitarioCalculado ? costoUnitarioCalculado : costoUnitario}
                 onChange={(e) => setCostoUnitario(e.target.value)}
+                readOnly={usaCostoUnitarioCalculado}
               />
+              {usaCostoUnitarioCalculado && (
+                <small>Calculado automaticamente segun pack.</small>
+              )}
             </div>
 
             <div className="input-group">
