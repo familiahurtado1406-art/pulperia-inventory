@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { db } from "../firebase/config";
 import {
   addDoc,
-  collection,
   deleteDoc,
-  doc,
   getDocs,
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
 import AppLayout from "../components/AppLayout";
+import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 function ProveedoresPage() {
   const [proveedores, setProveedores] = useState([]);
@@ -24,7 +22,7 @@ function ProveedoresPage() {
   const [editingProveedor, setEditingProveedor] = useState(null);
 
   const loadProveedores = async () => {
-    const snapshot = await getDocs(collection(db, "proveedores"));
+    const snapshot = await getDocs(userCollection("proveedores"));
     const data = snapshot.docs.map((docItem) => ({
       id: docItem.id,
       ...docItem.data(),
@@ -62,7 +60,7 @@ function ProveedoresPage() {
 
     try {
       if (editingProveedor) {
-        await updateDoc(doc(db, "proveedores", editingProveedor.id), {
+        await updateDoc(userDoc("proveedores", editingProveedor.id), {
           nombre,
           nombreColaborador,
           telefono,
@@ -71,7 +69,7 @@ function ProveedoresPage() {
           updatedAt: serverTimestamp(),
         });
       } else {
-        await addDoc(collection(db, "proveedores"), {
+        await addDoc(userCollection("proveedores"), {
           nombre,
           nombreColaborador,
           telefono,
@@ -107,7 +105,7 @@ function ProveedoresPage() {
     if (!confirmDelete) return;
 
     try {
-      await deleteDoc(doc(db, "proveedores", id));
+      await deleteDoc(userDoc("proveedores", id));
       alert("Proveedor eliminado correctamente");
 
       if (editingProveedor?.id === id) {

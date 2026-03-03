@@ -1,13 +1,13 @@
 import {
   Timestamp,
   addDoc,
-  collection,
   getDocs,
   query,
   serverTimestamp,
   where,
 } from "firebase/firestore";
-import { auth, db } from "../firebase/config";
+import { auth } from "../firebase/config";
+import { userCollection } from "./userScopedFirestore";
 
 export const getStockBaseValue = (product) =>
   Number(product?.stockBase ?? product?.stockUnidades ?? product?.stockActual ?? 0);
@@ -27,7 +27,7 @@ export const registerInventoryChange = async ({
   const previous = Number(stockAnterior || 0);
   const next = Number(stockNuevo || 0);
 
-  await addDoc(collection(db, "historial_cambios"), {
+  await addDoc(userCollection("historial_cambios"), {
     productoId: getProductoId(product),
     nombreProducto: product?.nombre || "",
     tipoMovimiento,
@@ -45,7 +45,7 @@ export const getWeeklyRotationByProduct = async (days = 7) => {
   startDate.setDate(startDate.getDate() - Number(days || 7));
 
   const historyQuery = query(
-    collection(db, "historial_cambios"),
+    userCollection("historial_cambios"),
     where("fecha", ">=", Timestamp.fromDate(startDate))
   );
   const snapshot = await getDocs(historyQuery);

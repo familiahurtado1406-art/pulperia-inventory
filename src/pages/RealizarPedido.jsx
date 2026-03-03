@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { db } from "../firebase/config";
 import {
   addDoc,
-  collection,
   getDocs,
   query,
   serverTimestamp,
@@ -13,6 +11,7 @@ import {
   getWeeklyRotationByProduct,
 } from "../services/inventoryHistoryService";
 import { getProviderProductLinksByProvider } from "../services/providerProductService";
+import { userCollection } from "../services/userScopedFirestore";
 
 const getTomorrowIsoDate = () => {
   const tomorrow = new Date();
@@ -111,8 +110,8 @@ function RealizarPedido() {
   useEffect(() => {
     const fetchInitialData = async () => {
       const [proveedoresSnap, pedidosSnap, rotacionSemanal] = await Promise.all([
-        getDocs(collection(db, "proveedores")),
-        getDocs(collection(db, "pedidos")),
+        getDocs(userCollection("proveedores")),
+        getDocs(userCollection("pedidos")),
         getWeeklyRotationByProduct(7),
       ]);
 
@@ -137,7 +136,7 @@ function RealizarPedido() {
       }
 
       const q = query(
-        collection(db, "products"),
+        userCollection("products"),
         where("activo", "==", true)
       );
       const [snapshot, links] = await Promise.all([
@@ -204,7 +203,7 @@ function RealizarPedido() {
       productosPedido.reduce((acc, item) => acc + Number(item.costoTotal || 0), 0).toFixed(2)
     );
 
-    await addDoc(collection(db, "pedidos"), {
+    await addDoc(userCollection("pedidos"), {
       proveedorId: proveedorSeleccionado,
       proveedorNombre: proveedorSeleccionadoNombre,
       fechaCreacion: serverTimestamp(),

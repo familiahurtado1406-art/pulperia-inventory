@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "../firebase/config";
+import { getDocs } from "firebase/firestore";
+import { userCollection } from "../services/userScopedFirestore";
 
 const MOVEMENT_OPTIONS = [
   { value: "todos", label: "Todos" },
@@ -26,7 +26,7 @@ function HistorialCambios() {
 
   useEffect(() => {
     const fetchMovimientos = async () => {
-      const snapshot = await getDocs(collection(db, "historial_cambios"));
+      const snapshot = await getDocs(userCollection("historial_cambios"));
       const data = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
 
       data.sort((a, b) => {

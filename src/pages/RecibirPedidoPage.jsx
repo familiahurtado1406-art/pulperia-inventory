@@ -1,9 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import { db } from "../firebase/config";
 import {
   addDoc,
-  collection,
-  doc,
   getDocs,
   increment,
   query,
@@ -19,6 +16,7 @@ import {
   getProviderProductLinksByProvider,
   upsertProviderProductLink,
 } from "../services/providerProductService";
+import { userCollection, userDoc, userSubcollection } from "../services/userScopedFirestore";
 
 function RecibirPedidoPage() {
   const [suppliers, setSuppliers] = useState([]);
@@ -39,7 +37,7 @@ function RecibirPedidoPage() {
 
   useEffect(() => {
     const init = async () => {
-      const snapshot = await getDocs(collection(db, "proveedores"));
+      const snapshot = await getDocs(userCollection("proveedores"));
       setSuppliers(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
     };
     init();
@@ -114,7 +112,7 @@ function RecibirPedidoPage() {
 
     const [links, snapshot] = await Promise.all([
       getProviderProductLinksByProvider(supplierId),
-      getDocs(query(collection(db, "products"), where("activo", "==", true))),
+      getDocs(query(userCollection("products"), where("activo", "==", true))),
     ]);
     const ids = new Set(links.map((link) => String(link.productDocId || link.productoId || "")));
     setSupplierProducts(
@@ -312,7 +310,7 @@ function RecibirPedidoPage() {
           updatePayload.precioVenta = Number(item.precioVentaUnidad);
         }
 
-        await updateDoc(doc(db, "products", item.productDocId), updatePayload);
+        await updateDoc(userDoc("products", item.productDocId), updatePayload);
         await registerInventoryChange({
           product: {
             id: item.productDocId,
@@ -324,7 +322,7 @@ function RecibirPedidoPage() {
           stockNuevo,
         });
 
-        await addDoc(collection(db, "products", item.productDocId, "historialPrecios"), {
+        await addDoc(userSubcollection("products", item.productDocId, "historialPrecios"), {
           proveedorId: selectedSupplier,
           proveedorNombre: supplierName,
           costoUnitarioBase: Number(item.costoUnitario || 0),
@@ -343,7 +341,7 @@ function RecibirPedidoPage() {
         currentStockByProduct[item.productDocId] = stockNuevo;
       }
 
-      await addDoc(collection(db, "movimientos"), {
+      await addDoc(userCollection("movimientos"), {
         type: "entrada",
         supplierId: selectedSupplier,
         items: receivedItems,
@@ -672,3 +670,5 @@ function RecibirPedidoPage() {
 }
 
 export default RecibirPedidoPage;
+
+

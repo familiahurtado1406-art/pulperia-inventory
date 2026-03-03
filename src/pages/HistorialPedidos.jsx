@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  collection,
-  doc,
   getDocs,
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
-import { db } from "../firebase/config";
+import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 const formatDate = (value) => {
   if (!value) return "-";
@@ -23,7 +21,7 @@ function HistorialPedidos() {
 
   useEffect(() => {
     const fetchPedidos = async () => {
-      const snapshot = await getDocs(collection(db, "pedidos"));
+      const snapshot = await getDocs(userCollection("pedidos"));
       const data = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
 
       data.sort((a, b) => {
@@ -53,7 +51,7 @@ function HistorialPedidos() {
   }, [pedidos, search, estadoFiltro]);
 
   const marcarRecibido = async (pedidoId) => {
-    await updateDoc(doc(db, "pedidos", pedidoId), {
+    await updateDoc(userDoc("pedidos", pedidoId), {
       estado: "recibido",
       fechaRecibido: serverTimestamp(),
     });

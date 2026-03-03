@@ -1,5 +1,5 @@
-import { Timestamp, collection, getDocs, query, where } from "firebase/firestore";
-import { db } from "../firebase/config";
+import { Timestamp, getDocs, query, where } from "firebase/firestore";
+import { userCollection } from "./userScopedFirestore";
 
 const toMillis = (value) => {
   if (!value) return 0;
@@ -50,9 +50,9 @@ const analyticsCache = {
 
 export const getComprasAnalytics = async () => {
   const [pedidosSnap, proveedoresSnap, productsSnap] = await Promise.all([
-    getDocs(collection(db, "pedidos")),
-    getDocs(collection(db, "proveedores")),
-    getDocs(collection(db, "products")),
+    getDocs(userCollection("pedidos")),
+    getDocs(userCollection("proveedores")),
+    getDocs(userCollection("products")),
   ]);
 
   const pedidos = pedidosSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
@@ -229,17 +229,17 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
 
   const [productsSnap, proveedoresSnap, historySnap, pedidosSnap, linksSnapA, linksSnapB] =
     await Promise.all([
-      getDocs(collection(db, "products")),
-      getDocs(collection(db, "proveedores")),
+      getDocs(userCollection("products")),
+      getDocs(userCollection("proveedores")),
       getDocs(
         query(
-          collection(db, "historial_cambios"),
+          userCollection("historial_cambios"),
           where("fecha", ">=", Timestamp.fromDate(monthAgoDate))
         )
       ),
-      getDocs(collection(db, "pedidos")),
-      getDocs(collection(db, "proveedor_producto")),
-      getDocs(collection(db, "proveedorProducto")),
+      getDocs(userCollection("pedidos")),
+      getDocs(userCollection("proveedor_producto")),
+      getDocs(userCollection("proveedorProducto")),
     ]);
 
   const products = productsSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));

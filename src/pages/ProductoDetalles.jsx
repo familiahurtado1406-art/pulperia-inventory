@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Timestamp, collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { Timestamp, getDoc, getDocs, query, where } from "firebase/firestore";
 import { useParams } from "react-router-dom";
-import { db } from "../firebase/config";
 import { getProviderProductLinksByProduct } from "../services/providerProductService";
+import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 const LOOKBACK_DAYS = 30;
 const COVERAGE_DAYS = 10;
@@ -57,7 +57,7 @@ function ProductoDetalles() {
       setError("");
 
       try {
-        const productSnap = await getDoc(doc(db, "products", id));
+        const productSnap = await getDoc(userDoc("products", id));
         if (!productSnap.exists()) {
           setError("Producto no encontrado");
           setProduct(null);
@@ -75,14 +75,14 @@ function ProductoDetalles() {
         const startDate = new Date(now - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
 
         const historyQuery = query(
-          collection(db, "historial_cambios"),
+          userCollection("historial_cambios"),
           where("productoId", "==", productoId),
           where("fecha", ">=", Timestamp.fromDate(startDate))
         );
 
         const [historySnap, pedidosSnap, providerLinks] = await Promise.all([
           getDocs(historyQuery),
-          getDocs(collection(db, "pedidos")),
+          getDocs(userCollection("pedidos")),
           getProviderProductLinksByProduct({ productDocId: currentProduct.id, productoId }),
         ]);
 

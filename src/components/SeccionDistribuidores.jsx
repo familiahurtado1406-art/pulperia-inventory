@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "../firebase/config";
+import { getDocs } from "firebase/firestore";
 import {
   getProviderProductLinksByProduct,
   upsertProviderProductLink,
 } from "../services/providerProductService";
+import { userCollection } from "../services/userScopedFirestore";
 
 function SeccionDistribuidores({ producto }) {
   const [relaciones, setRelaciones] = useState([]);
@@ -44,7 +44,7 @@ function SeccionDistribuidores({ producto }) {
 
   useEffect(() => {
     const fetchProveedores = async () => {
-      const snap = await getDocs(collection(db, "proveedores"));
+      const snap = await getDocs(userCollection("proveedores"));
       setProveedores(snap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })));
     };
     fetchProveedores();

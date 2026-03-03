@@ -1,8 +1,8 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import { collection, doc, getDocs, query, updateDoc, where } from "firebase/firestore";
-import { db } from "../firebase/config";
+import { getDocs, query, updateDoc, where } from "firebase/firestore";
 import { getStockBaseValue, registerInventoryChange } from "../services/inventoryHistoryService";
 import { getProviderProductLinksByProvider } from "../services/providerProductService";
+import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 function Conteo() {
   const [products, setProducts] = useState([]);
@@ -18,7 +18,7 @@ function Conteo() {
 
   useEffect(() => {
     const fetchProveedores = async () => {
-      const proveedoresSnap = await getDocs(collection(db, "proveedores"));
+      const proveedoresSnap = await getDocs(userCollection("proveedores"));
       setProveedores(
         proveedoresSnap.docs.map((docItem) => ({
           id: docItem.id,
@@ -33,7 +33,7 @@ function Conteo() {
   useEffect(() => {
     const fetchProducts = async () => {
       const buildQuery = (collectionName) =>
-        query(collection(db, collectionName), where("activo", "==", true));
+        query(userCollection(collectionName), where("activo", "==", true));
 
       const primarySnap = await getDocs(buildQuery("products"));
       let primaryData = primarySnap.docs.map((docItem) => ({
@@ -134,7 +134,7 @@ function Conteo() {
 
     try {
       const targetCollection = productCollectionById[product.id] || "products";
-      await updateDoc(doc(db, targetCollection, product.id), {
+      await updateDoc(userDoc(targetCollection, product.id), {
         stockBase: Number(equivalenteBase),
         stockActual: Number(equivalenteBase),
       });

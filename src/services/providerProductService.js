@@ -1,13 +1,12 @@
 import {
   addDoc,
-  collection,
   getDocs,
   query,
   serverTimestamp,
   updateDoc,
   where,
 } from "firebase/firestore";
-import { db } from "../firebase/config";
+import { userCollection } from "./userScopedFirestore";
 
 const COLLECTIONS = ["proveedor_producto", "proveedorProducto"];
 
@@ -37,7 +36,7 @@ export const getProviderProductLinksByProvider = async (proveedorId) => {
     COLLECTIONS.map((name) =>
       getDocs(
         query(
-          collection(db, name),
+          userCollection(name),
           where("proveedorId", "==", proveedorId),
           where("activo", "==", true)
         )
@@ -54,14 +53,14 @@ export const getProviderProductLinksByProduct = async ({ productDocId, productoI
     productDocId
       ? Promise.all(
           COLLECTIONS.map((name) =>
-            getDocs(query(collection(db, name), where("productDocId", "==", productDocId)))
+            getDocs(query(userCollection(name), where("productDocId", "==", productDocId)))
           )
         )
       : Promise.resolve([]),
     productoId
       ? Promise.all(
           COLLECTIONS.map((name) =>
-            getDocs(query(collection(db, name), where("productoId", "==", productoId)))
+            getDocs(query(userCollection(name), where("productoId", "==", productoId)))
           )
         )
       : Promise.resolve([]),
@@ -88,7 +87,7 @@ export const upsertProviderProductLink = async ({
 
   const existingSnapshot = await getDocs(
     query(
-      collection(db, "proveedor_producto"),
+      userCollection("proveedor_producto"),
       where("productDocId", "==", productDocId),
       where("proveedorId", "==", proveedorId)
     )
@@ -114,7 +113,7 @@ export const upsertProviderProductLink = async ({
     return;
   }
 
-  await addDoc(collection(db, "proveedor_producto"), {
+  await addDoc(userCollection("proveedor_producto"), {
     ...payload,
     createdAt: serverTimestamp(),
   });

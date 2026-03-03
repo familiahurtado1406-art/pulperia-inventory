@@ -2,20 +2,18 @@
 import { useNavigate } from "react-router-dom";
 import {
   addDoc,
-  collection,
   deleteDoc,
-  doc,
   getDocs,
   query,
   serverTimestamp,
   updateDoc,
   where,
 } from "firebase/firestore";
-import { db } from "../firebase/config";
 import AppLayout from "../components/AppLayout";
 import ProductCard from "../components/ProductCard";
 import SeccionDistribuidores from "../components/SeccionDistribuidores";
 import SkeletonCard from "../components/SkeletonCard";
+import { userCollection, userDoc } from "../services/userScopedFirestore";
 import {
   FaBalanceScale,
   FaBoxOpen,
@@ -61,7 +59,7 @@ function Products() {
     precioVentaManual === "" ? precioVentaCalculado : Number(precioVentaManual);
 
   const fetchProducts = async () => {
-    const snapshot = await getDocs(collection(db, "products"));
+    const snapshot = await getDocs(userCollection("products"));
     setProducts(
       snapshot.docs.map((docItem) => ({
         id: docItem.id,
@@ -86,7 +84,7 @@ function Products() {
     if (searchTerm.trim().length < 2) return;
 
     const q = query(
-      collection(db, "products"),
+      userCollection("products"),
       where("nombre", ">=", searchTerm),
       where("nombre", "<=", `${searchTerm}\uf8ff`)
     );
@@ -169,7 +167,7 @@ function Products() {
 
     try {
       if (editingProduct) {
-        await updateDoc(doc(db, "products", editingProduct.id), {
+        await updateDoc(userDoc("products", editingProduct.id), {
           nombre: nombre.trim(),
           medidaBase,
           medidaInterna,
@@ -193,7 +191,7 @@ function Products() {
         setEditingProduct(null);
       } else {
         const q = query(
-          collection(db, "products"),
+          userCollection("products"),
           where("nombre", "==", nombre.trim())
         );
 
@@ -204,7 +202,7 @@ function Products() {
         }
 
         const newProductoId = generateProductId(nombre, products);
-        await addDoc(collection(db, "products"), {
+        await addDoc(userCollection("products"), {
           productoId: newProductoId,
           nombre: nombre.trim(),
           medidaBase,
@@ -268,7 +266,7 @@ function Products() {
     if (!confirmDelete) return;
 
     try {
-      await deleteDoc(doc(db, "products", id));
+      await deleteDoc(userDoc("products", id));
       setProducts((prev) => prev.filter((p) => p.id !== id));
       if (editingProduct?.id === id) {
         setEditingProduct(null);
