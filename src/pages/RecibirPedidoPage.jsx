@@ -1,4 +1,5 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import {
   addDoc,
   getDocs,
@@ -35,6 +36,7 @@ function RecibirPedidoPage() {
   const [precioOriginal, setPrecioOriginal] = useState(0);
   const [showPriceConfirmModal, setShowPriceConfirmModal] = useState(false);
   const [pendingItemData, setPendingItemData] = useState(null);
+  const [isSavingPedido, setIsSavingPedido] = useState(false);
   const unidadesPorInternaActual = Number(
     selectedProduct?.unidadesPorInterna ?? selectedProduct?.unidadesPorPack ?? 0
   );
@@ -251,7 +253,7 @@ function RecibirPedidoPage() {
     const adicionalBase = Number(cantidadBaseAdicional || 0);
     const costoTotalNum = Number(costoTotal);
     if (previewCantidadBase <= 0 || costoTotalNum <= 0 || costoUnitario <= 0) {
-      alert("Completa cantidad y costo total validos");
+      toast.error("Completa cantidad y costo total validos");
       return;
     }
 
@@ -259,7 +261,7 @@ function RecibirPedidoPage() {
       selectedProduct.unidadesPorInterna ?? selectedProduct.unidadesPorPack ?? 0
     );
     if (medidaEntrada === "interna" && unidadesPorInterna <= 0) {
-      alert("Este producto no tiene equivalencia interna configurada");
+      toast.error("Este producto no tiene equivalencia interna configurada");
       return;
     }
 
@@ -299,13 +301,14 @@ function RecibirPedidoPage() {
 
   const handleSavePedido = async () => {
     if (!selectedSupplier) {
-      alert("Selecciona un proveedor");
+      toast.error("Selecciona un proveedor");
       return;
     }
     if (receivedItems.length === 0) {
-      alert("No hay productos agregados");
+      toast.error("No hay productos agregados");
       return;
     }
+    setIsSavingPedido(true);
 
     try {
       const supplierName =
@@ -377,11 +380,13 @@ function RecibirPedidoPage() {
       });
 
       setReceivedItems([]);
-      alert("Pedido registrado correctamente");
+      toast.success("Pedido registrado correctamente");
       await loadSupplierProducts(selectedSupplier);
     } catch (error) {
       console.error(error);
-      alert("Error al registrar pedido");
+      toast.error("Error al registrar pedido");
+    } finally {
+      setIsSavingPedido(false);
     }
   };
 
@@ -713,8 +718,13 @@ function RecibirPedidoPage() {
         </div>
 
         <div className="spacer" />
-        <button type="button" className="btn-primary" onClick={handleSavePedido}>
-          Guardar Pedido
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={handleSavePedido}
+          disabled={isSavingPedido}
+        >
+          {isSavingPedido ? "Guardando..." : "Guardar Pedido"}
         </button>
       </div>
     </div>

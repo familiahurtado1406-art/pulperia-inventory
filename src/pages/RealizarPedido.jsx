@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import {
   addDoc,
   getDocs,
@@ -28,6 +29,7 @@ function RealizarPedido() {
   const [pedido, setPedido] = useState({});
   const [rotacionPorProducto, setRotacionPorProducto] = useState({});
   const [providerLinkByProductId, setProviderLinkByProductId] = useState({});
+  const [isSavingPedido, setIsSavingPedido] = useState(false);
 
   const proveedoresMap = useMemo(() => {
     const map = {};
@@ -161,7 +163,12 @@ function RealizarPedido() {
 
       const pedidoInicial = {};
       data.forEach((p) => {
-        pedidoInicial[p.id] = Number(calcularRecomendadoFinal(p).toFixed(2));
+        const sugerido = Number(calcularRecomendadoFinal(p).toFixed(2));
+        pedidoInicial[p.id] = {
+          sugeridoBase: sugerido,
+          pedidoBase: sugerido,
+          incluir: sugerido > 0,
+        };
       });
       setPedido(pedidoInicial);
     };
@@ -171,23 +178,39 @@ function RealizarPedido() {
 
   const generarPedido = async () => {
     if (!proveedorSeleccionado) {
-      alert("Seleccione un proveedor");
+      toast.error("Seleccione un proveedor");
       return;
     }
+    setIsSavingPedido(true);
 
     const productosPedido = productos
-      .filter((p) => Number(pedido[p.id]) > 0)
+      .filter((p) => {
+        const item = pedido[p.id] || {};
+        return item.incluir !== false && Number(item.pedidoBase || 0) > 0;
+      })
       .map((p) => {
-        const cantidadBase = Number(pedido[p.id]);
+        const item = pedido[p.id] || {};
+        const cantidadBase = Number(item.pedidoBase || 0);
         const relationCost = Number(providerLinkByProductId[p.id]?.costoUnitario || 0);
         const costoUnitarioBase =
           relationCost > 0 ? relationCost : Number(p.costoUnitarioBase ?? p.costoUnitario ?? 0);
         const costoTotal = Number((cantidadBase * costoUnitarioBase).toFixed(2));
+        const sugeridoBase = Number(item.sugeridoBase || 0);
+        const unidadesPorInterna = Number(p.unidadesPorInterna ?? p.unidadesPorPack ?? 0);
+        const sugeridoPack =
+          unidadesPorInterna > 0 ? Number((sugeridoBase / unidadesPorInterna).toFixed(2)) : null;
+        const pedidoPack =
+          unidadesPorInterna > 0 ? Number((cantidadBase / unidadesPorInterna).toFixed(2)) : null;
 
         return {
           productoId: p.productoId || p.id,
           nombre: p.nombre,
           cantidadBase,
+          sugeridoBase,
+          pedidoBase: cantidadBase,
+          incluido: item.incluir !== false,
+          sugeridoPack,
+          pedidoPack,
           medidaBase: p.medidaBase || "UN",
           costoUnitarioBase,
           costoTotal,
@@ -195,7 +218,8 @@ function RealizarPedido() {
       });
 
     if (productosPedido.length === 0) {
-      alert("No hay productos para pedir");
+      toast.error("No hay productos para pedir");
+      setIsSavingPedido(false);
       return;
     }
 
@@ -203,18 +227,24 @@ function RealizarPedido() {
       productosPedido.reduce((acc, item) => acc + Number(item.costoTotal || 0), 0).toFixed(2)
     );
 
-    await addDoc(userCollection("pedidos"), {
-      proveedorId: proveedorSeleccionado,
-      proveedorNombre: proveedorSeleccionadoNombre,
-      fechaCreacion: serverTimestamp(),
-      fechaEntregaEstimada: fechaEntrega || getTomorrowIsoDate(),
-      fechaRecibido: null,
-      totalCosto,
-      estado: "pendiente",
-      productos: productosPedido,
-    });
-
-    alert("Pedido generado correctamente");
+    try {
+      await addDoc(userCollection("pedidos"), {
+        proveedorId: proveedorSeleccionado,
+        proveedorNombre: proveedorSeleccionadoNombre,
+        fechaCreacion: serverTimestamp(),
+        fechaEntregaEstimada: fechaEntrega || getTomorrowIsoDate(),
+        fechaRecibido: null,
+        totalCosto,
+        estado: "pendiente",
+        productos: productosPedido,
+      });
+      toast.success("Pedido generado correctamente");
+    } catch (error) {
+      console.error(error);
+      toast.error("Error generando pedido");
+    } finally {
+      setIsSavingPedido(false);
+    }
   };
 
   return (
@@ -244,6 +274,28 @@ function RealizarPedido() {
           onChange={(e) => setFechaEntrega(e.target.value)}
         />
       </div>
+      <div className="spacer" />
+      <button
+        type="button"
+        className="btn-secondary"
+        onClick={() =>
+          setPedido((prev) => {
+            const next = { ...prev };
+            productos.forEach((p) => {
+              const actual = prev[p.id] || {};
+              const sugerido = Number(actual.sugeridoBase || 0);
+              next[p.id] = {
+                ...actual,
+                incluir: sugerido > 0,
+                pedidoBase: sugerido,
+              };
+            });
+            return next;
+          })
+        }
+      >
+        Aplicar sugerencias
+      </button>
 
       <div className="pedido-list">
         <div className="table-scroll">
@@ -263,6 +315,8 @@ function RealizarPedido() {
                 const recomendadoStock = calcularRecomendadoStock(p);
                 const recomendadoRotacion = getRecomendacionRotacion(p);
                 const recomendadoFinal = Math.max(recomendadoStock, recomendadoRotacion);
+                const rowState = pedido[p.id] || {};
+                const incluir = rowState.incluir !== false;
                 return (
                   <tr key={`${p.id}-table`}>
                     <td>{p.nombre}</td>
@@ -282,10 +336,17 @@ function RealizarPedido() {
                       <input
                         type="number"
                         className="input-modern"
-                        value={pedido[p.id] || 0}
+                        value={Number(rowState.pedidoBase || 0)}
                         onChange={(e) =>
-                          setPedido((prev) => ({ ...prev, [p.id]: e.target.value }))
+                          setPedido((prev) => ({
+                            ...prev,
+                            [p.id]: {
+                              ...(prev[p.id] || {}),
+                              pedidoBase: Number(e.target.value || 0),
+                            },
+                          }))
                         }
+                        disabled={!incluir}
                       />
                     </td>
                   </tr>
@@ -300,8 +361,12 @@ function RealizarPedido() {
           const recomendadoRotacion = getRecomendacionRotacion(p);
           const recomendado = Math.max(recomendadoStock, recomendadoRotacion);
           const unidadesPorInterna = Number(p.unidadesPorInterna ?? p.unidadesPorPack ?? 0);
-          const recomendadoInterna =
-            unidadesPorInterna > 0 ? recomendado / unidadesPorInterna : null;
+          const stateItem = pedido[p.id] || {};
+          const sugeridoBase = Number(stateItem.sugeridoBase ?? recomendado ?? 0);
+          const pedidoBase = Number(stateItem.pedidoBase ?? recomendado ?? 0);
+          const incluir = stateItem.incluir !== false;
+          const sugeridoPack = unidadesPorInterna > 0 ? sugeridoBase / unidadesPorInterna : null;
+          const pedidoPack = unidadesPorInterna > 0 ? pedidoBase / unidadesPorInterna : null;
           const productoId = p.productoId || p.id;
           const mejor = mejorProveedorPorProducto[productoId];
           const proveedorNoEsElMejor =
@@ -336,11 +401,19 @@ function RealizarPedido() {
                   </strong>
                 </p>
                 <p className="recomendado">
-                  Recomendado final:{" "}
+                  Pedido sugerido:{" "}
                   <strong>
-                    {recomendado.toFixed(2)} {p.medidaBase || "UN"}
-                    {recomendadoInterna !== null &&
-                      ` (${recomendadoInterna.toFixed(2)} ${p.medidaInterna || "INT"})`}
+                    {sugeridoBase.toFixed(2)} {p.medidaBase || "UN"}
+                    {sugeridoPack !== null &&
+                      ` (${sugeridoPack.toFixed(2)} ${p.medidaInterna || "PACK"})`}
+                  </strong>
+                </p>
+                <p>
+                  Pedido usuario:{" "}
+                  <strong>
+                    {pedidoBase.toFixed(2)} {p.medidaBase || "UN"}
+                    {pedidoPack !== null &&
+                      ` (${pedidoPack.toFixed(2)} ${p.medidaInterna || "PACK"})`}
                   </strong>
                 </p>
                 {mejor && (
@@ -355,23 +428,108 @@ function RealizarPedido() {
               </div>
 
               <div className="pedido-input">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={incluir}
+                    onChange={(e) =>
+                      setPedido((prev) => ({
+                        ...prev,
+                        [p.id]: {
+                          ...(prev[p.id] || {}),
+                          incluir: e.target.checked,
+                        },
+                      }))
+                    }
+                  />{" "}
+                  Incluir en pedido
+                </label>
                 <label>Unidades a pedir</label>
                 <input
                   type="number"
                   className="input-modern"
-                  value={pedido[p.id] || 0}
+                  value={pedidoBase}
                   onChange={(e) =>
-                    setPedido((prev) => ({ ...prev, [p.id]: e.target.value }))
+                    setPedido((prev) => ({
+                      ...prev,
+                      [p.id]: {
+                        ...(prev[p.id] || {}),
+                        pedidoBase: Number(e.target.value || 0),
+                      },
+                    }))
                   }
+                  disabled={!incluir}
                 />
+                <div className="pedido-quick-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() =>
+                      setPedido((prev) => ({
+                        ...prev,
+                        [p.id]: {
+                          ...(prev[p.id] || {}),
+                          pedidoBase: sugeridoBase,
+                        },
+                      }))
+                    }
+                  >
+                    Usar sugerido
+                  </button>
+                  {unidadesPorInterna > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() =>
+                          setPedido((prev) => {
+                            const current = Number(prev[p.id]?.pedidoBase || 0);
+                            return {
+                              ...prev,
+                              [p.id]: {
+                                ...(prev[p.id] || {}),
+                                pedidoBase: Math.max(0, current - unidadesPorInterna),
+                              },
+                            };
+                          })
+                        }
+                      >
+                        -1 {p.medidaInterna || "PACK"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() =>
+                          setPedido((prev) => {
+                            const current = Number(prev[p.id]?.pedidoBase || 0);
+                            return {
+                              ...prev,
+                              [p.id]: {
+                                ...(prev[p.id] || {}),
+                                pedidoBase: current + unidadesPorInterna,
+                              },
+                            };
+                          })
+                        }
+                      >
+                        +1 {p.medidaInterna || "PACK"}
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
           );
         })}
       </div>
 
-      <button type="button" className="btn-primary btn-full" onClick={generarPedido}>
-        Generar Pedido
+      <button
+        type="button"
+        className="btn-primary btn-full"
+        onClick={generarPedido}
+        disabled={isSavingPedido}
+      >
+        {isSavingPedido ? "Generando..." : "Generar Pedido"}
       </button>
     </div>
   );

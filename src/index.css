@@ -662,6 +662,34 @@ select {
   margin: 4px 0;
 }
 
+.scanner-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.scanner-actions small {
+  color: #666;
+  font-size: 12px;
+}
+
+.scanner-box {
+  width: 100%;
+  max-width: 520px;
+  border: 1px solid #dbe2ea;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 10px;
+  background: #f8fafc;
+}
+
+.scanner-message {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #1565c0;
+}
+
 .skeleton-card {
   height: 80px;
   border-radius: 12px;
@@ -953,6 +981,55 @@ select {
   margin-top: 8px;
 }
 
+.distributor-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.distributor-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.distributor-delete-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.provider-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+
+.provider-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.provider-badge.cost {
+  background: #e8f5e9;
+  color: #1b5e20;
+}
+
+.provider-badge.speed {
+  background: #e3f2fd;
+  color: #0d47a1;
+}
+
+.provider-badge.preferred {
+  background: #fff8e1;
+  color: #ef6c00;
+}
+
 .warning-provider {
   display: inline-block;
   margin-top: 6px;
@@ -972,6 +1049,13 @@ select {
   font-size: 12px;
   margin-bottom: 4px;
   display: block;
+}
+
+.pedido-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .btn-full {
@@ -1064,6 +1148,32 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboard-card {
+  background: #f6f7f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  text-align: left;
+}
+
+button.dashboard-card {
+  cursor: pointer;
+}
+
+.dashboard-card h2 {
+  font-size: 28px;
+  margin: 6px 0;
+  color: #1e293b;
+  line-height: 1.1;
 }
 
 .analytics-card {

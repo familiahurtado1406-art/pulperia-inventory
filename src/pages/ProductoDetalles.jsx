@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Timestamp, getDoc, getDocs, query, where } from "firebase/firestore";
+import { Timestamp, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import { useParams } from "react-router-dom";
 import { getProviderProductLinksByProduct } from "../services/providerProductService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
@@ -52,20 +52,50 @@ function ProductoDetalles() {
 
   useEffect(() => {
     const load = async () => {
-      if (!id) return;
+      const routeId = String(id || "").trim();
+      if (!routeId) {
+        console.error("[ProductoDetalles] ID recibido vacio o undefined:", id);
+        setError("No se recibio un ID de producto valido.");
+        setProduct(null);
+        setAnalytics(null);
+        setLoading(false);
+        return;
+      }
+
+      console.log("[ProductoDetalles] ID recibido:", routeId);
       setLoading(true);
       setError("");
 
       try {
-        const productSnap = await getDoc(userDoc("products", id));
-        if (!productSnap.exists()) {
-          setError("Producto no encontrado");
+        let productSnap = await getDoc(userDoc("products", routeId));
+        let currentProduct = null;
+
+        if (productSnap.exists()) {
+          currentProduct = { id: productSnap.id, ...productSnap.data() };
+        } else {
+          const fallbackQuery = query(
+            userCollection("products"),
+            where("productoId", "==", routeId),
+            limit(1)
+          );
+          const fallbackSnap = await getDocs(fallbackQuery);
+          if (!fallbackSnap.empty) {
+            const docItem = fallbackSnap.docs[0];
+            currentProduct = { id: docItem.id, ...docItem.data() };
+            console.warn(
+              "[ProductoDetalles] Producto encontrado por productoId (fallback), no por doc id:",
+              routeId
+            );
+          }
+        }
+
+        if (!currentProduct) {
+          setError(`Producto no encontrado para ID: ${routeId}`);
           setProduct(null);
           setAnalytics(null);
           return;
         }
 
-        const currentProduct = { id: productSnap.id, ...productSnap.data() };
         setProduct(currentProduct);
 
         const productoId = String(currentProduct.productoId || currentProduct.id);
@@ -74,10 +104,11 @@ function ProductoDetalles() {
         const prevWeekAgo = now - 14 * 24 * 60 * 60 * 1000;
         const startDate = new Date(now - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
 
+        // Avoid composite-index dependency in detail view:
+        // query by product and filter by date in-memory.
         const historyQuery = query(
           userCollection("historial_cambios"),
-          where("productoId", "==", productoId),
-          where("fecha", ">=", Timestamp.fromDate(startDate))
+          where("productoId", "==", productoId)
         );
 
         const [historySnap, pedidosSnap, providerLinks] = await Promise.all([
@@ -86,7 +117,12 @@ function ProductoDetalles() {
           getProviderProductLinksByProduct({ productDocId: currentProduct.id, productoId }),
         ]);
 
-        const movements = historySnap.docs.map((docItem) => docItem.data());
+        const movements = historySnap.docs
+          .map((docItem) => docItem.data())
+          .filter((movement) => {
+            const movementMillis = toMillis(movement.fecha);
+            return movementMillis >= startDate.getTime();
+          });
         const pedidos = pedidosSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
 
         let ventasMensuales = 0;
@@ -188,9 +224,39 @@ function ProductoDetalles() {
           }));
         const providerCostRows =
           providerCostRowsFromLinks.length > 0 ? providerCostRowsFromLinks : providerCostRowsFromPedidos;
-
         const bestProvider =
           providerCostRows.sort((a, b) => a.costoPromedio - b.costoPromedio)[0] || null;
+        const deliveryRows = Object.values(providerDeliveryById).map((item) => ({
+          proveedorId: item.proveedorId,
+          proveedorNombre: item.proveedorNombre,
+          promedioEntregaDias:
+            item.pedidos > 0 ? item.totalDias / item.pedidos : 0,
+        }));
+        const fastestDeliveryDays =
+          deliveryRows.length > 0
+            ? Math.min(...deliveryRows.map((item) => Number(item.promedioEntregaDias || 0)))
+            : null;
+        const providerCardRows = providerLinks.map((link) => {
+          const providerId = String(link.proveedorId || "");
+          const avgCost = Number(link.costoUnitario || 0);
+          const delivery = deliveryRows.find(
+            (item) => String(item.proveedorId) === providerId
+          );
+          return {
+            proveedorId: providerId,
+            proveedorNombre: link.proveedorNombre || providerId,
+            costoPromedio: avgCost,
+            promedioEntregaDias: Number(delivery?.promedioEntregaDias || 0),
+            preferido: !!link.preferido,
+            isBestCost:
+              !!bestProvider &&
+              String(bestProvider.proveedorId || "") === providerId,
+            isFastestDelivery:
+              fastestDeliveryDays !== null &&
+              Number(delivery?.promedioEntregaDias || 0) > 0 &&
+              Number(delivery?.promedioEntregaDias || 0) === fastestDeliveryDays,
+          };
+        });
         const currentProviderId = bestProvider?.proveedorId || providerLinks[0]?.proveedorId || "";
         const currentProviderNombre =
           bestProvider?.proveedorNombre ||
@@ -240,10 +306,11 @@ function ProductoDetalles() {
           deliveryStatus,
           currentProviderIsNotBest:
             !!bestProvider && !!currentProviderId && bestProvider.proveedorId !== currentProviderId,
+          providerCardRows,
           alerts,
         });
       } catch (err) {
-        console.error(err);
+        console.error("[ProductoDetalles] Error cargando producto:", err);
         setError("No se pudo cargar el detalle del producto.");
       } finally {
         setLoading(false);
@@ -340,6 +407,34 @@ function ProductoDetalles() {
         ) : (
           <p>Sin datos de entrega para el proveedor actual.</p>
         )}
+
+        {Array.isArray(analytics.providerCardRows) &&
+          analytics.providerCardRows.length > 0 && (
+            <div className="spacer">
+              {analytics.providerCardRows.map((provider) => (
+                <div
+                  key={`provider-${provider.proveedorId}`}
+                  className="pedido-detail-item"
+                >
+                  <p>
+                    <strong>{provider.proveedorNombre}</strong>
+                  </p>
+                  <div className="provider-badges">
+                    {provider.isBestCost && (
+                      <span className="provider-badge cost">Mejor precio</span>
+                    )}
+                    {provider.isFastestDelivery && (
+                      <span className="provider-badge speed">Entrega rapida</span>
+                    )}
+                    {provider.preferido && (
+                      <span className="provider-badge preferred">Preferido</span>
+                    )}
+                  </div>
+                  <p>Costo unitario: C${Number(provider.costoPromedio || 0).toFixed(2)}</p>
+                </div>
+              ))}
+            </div>
+          )}
       </div>
 
       {analytics.alerts.length > 0 && (

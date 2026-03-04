@@ -53,14 +53,26 @@ export const getProviderProductLinksByProduct = async ({ productDocId, productoI
     productDocId
       ? Promise.all(
           COLLECTIONS.map((name) =>
-            getDocs(query(userCollection(name), where("productDocId", "==", productDocId)))
+            getDocs(
+              query(
+                userCollection(name),
+                where("productDocId", "==", productDocId),
+                where("activo", "==", true)
+              )
+            )
           )
         )
       : Promise.resolve([]),
     productoId
       ? Promise.all(
           COLLECTIONS.map((name) =>
-            getDocs(query(userCollection(name), where("productoId", "==", productoId)))
+            getDocs(
+              query(
+                userCollection(name),
+                where("productoId", "==", productoId),
+                where("activo", "==", true)
+              )
+            )
           )
         )
       : Promise.resolve([]),
@@ -80,7 +92,7 @@ export const upsertProviderProductLink = async ({
   proveedorNombre,
   costoUnitario,
   costoPack,
-  promedioEntrega = null,
+  preferido,
   activo = true,
 }) => {
   if (!productDocId || !proveedorId) return;
@@ -100,13 +112,12 @@ export const upsertProviderProductLink = async ({
     proveedorNombre: proveedorNombre || proveedorId,
     costoUnitario: Number(costoUnitario || 0),
     costoPack: costoPack === null || costoPack === undefined ? null : Number(costoPack || 0),
-    promedioEntrega:
-      promedioEntrega === null || promedioEntrega === undefined
-        ? null
-        : Number(promedioEntrega || 0),
     activo,
     updatedAt: serverTimestamp(),
   };
+  if (preferido !== undefined) {
+    payload.preferido = !!preferido;
+  }
 
   if (!existingSnapshot.empty) {
     await updateDoc(existingSnapshot.docs[0].ref, payload);
@@ -117,4 +128,62 @@ export const upsertProviderProductLink = async ({
     ...payload,
     createdAt: serverTimestamp(),
   });
+};
+
+export const deactivateProviderProductLink = async ({
+  productDocId,
+  productoId,
+  proveedorId,
+}) => {
+  if (!proveedorId || (!productDocId && !productoId)) return;
+
+  const snapshots = await Promise.all(
+    COLLECTIONS.map((collectionName) => {
+      const filters = [where("proveedorId", "==", proveedorId)];
+      if (productDocId) filters.push(where("productDocId", "==", productDocId));
+      else filters.push(where("productoId", "==", productoId));
+      return getDocs(query(userCollection(collectionName), ...filters));
+    })
+  );
+
+  const updates = snapshots
+    .flatMap((snapshot) => snapshot.docs)
+    .map((docItem) =>
+      updateDoc(docItem.ref, {
+        activo: false,
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+  await Promise.all(updates);
+};
+
+export const setPreferredProviderProductLink = async ({
+  productDocId,
+  productoId,
+  proveedorId,
+}) => {
+  if (!proveedorId || (!productDocId && !productoId)) return;
+
+  const snapshots = await Promise.all(
+    COLLECTIONS.map((collectionName) => {
+      if (productDocId) {
+        return getDocs(
+          query(userCollection(collectionName), where("productDocId", "==", productDocId))
+        );
+      }
+      return getDocs(query(userCollection(collectionName), where("productoId", "==", productoId)));
+    })
+  );
+
+  const updates = snapshots.flatMap((snapshot) =>
+    snapshot.docs.map((docItem) =>
+      updateDoc(docItem.ref, {
+        preferido: String(docItem.data().proveedorId || "") === String(proveedorId),
+        updatedAt: serverTimestamp(),
+      })
+    )
+  );
+
+  await Promise.all(updates);
 };

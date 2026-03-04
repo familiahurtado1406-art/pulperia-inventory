@@ -1,4 +1,5 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
 import {
   addDoc,
@@ -13,6 +14,7 @@ import AppLayout from "../components/AppLayout";
 import ProductCard from "../components/ProductCard";
 import SeccionDistribuidores from "../components/SeccionDistribuidores";
 import SkeletonCard from "../components/SkeletonCard";
+import { upsertProviderProductLink } from "../services/providerProductService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 import {
   FaBalanceScale,
@@ -47,6 +49,9 @@ function Products() {
   const [listSearch, setListSearch] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [suggestions, setSuggestions] = useState([]);
+  const [providersTemp, setProvidersTemp] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeletingId, setIsDeletingId] = useState("");
 
   const precioVentaCalculado = useMemo(() => {
     const costo = Number(costoUnitario);
@@ -169,10 +174,12 @@ function Products() {
     setPrecioVentaManual("");
     setSearchTerm("");
     setSuggestions([]);
+    setProvidersTemp([]);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsSaving(true);
 
     try {
       if (editingProduct) {
@@ -206,12 +213,13 @@ function Products() {
 
         const snapshot = await getDocs(q);
         if (!snapshot.empty) {
-          alert("Este producto ya existe");
+          toast.error("Este producto ya existe");
+          setIsSaving(false);
           return;
         }
 
         const newProductoId = generateProductId(nombre, products);
-        await addDoc(userCollection("products"), {
+        const newProductRef = await addDoc(userCollection("products"), {
           productoId: newProductoId,
           nombre: nombre.trim(),
           medidaBase,
@@ -233,14 +241,32 @@ function Products() {
           ultimaActualizacion: serverTimestamp(),
           createdAt: serverTimestamp(),
         });
+
+        for (const provider of providersTemp) {
+          await upsertProviderProductLink({
+            productDocId: newProductRef.id,
+            productoId: newProductoId,
+            proveedorId: provider.proveedorId,
+            proveedorNombre: provider.proveedorNombre || provider.proveedorId,
+            costoUnitario: Number(provider.costoUnitario || 0),
+            costoPack:
+              provider.costoPack === null || provider.costoPack === undefined
+                ? null
+                : Number(provider.costoPack || 0),
+            activo: true,
+          });
+        }
       }
 
       await fetchProducts();
       clearForm();
       setOpenForm(false);
+      toast.success(editingProduct ? "Producto actualizado" : "Producto creado");
     } catch (error) {
       console.error(error);
-      alert("Error guardando producto");
+      toast.error("Error guardando producto");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -265,6 +291,7 @@ function Products() {
     setCostoPack(product.costoPack === null || product.costoPack === undefined ? "" : String(product.costoPack));
     setMargen(String(product.margen ?? 20));
     setPrecioVentaManual(String(product.precioVentaBase ?? product.precioVenta ?? ""));
+    setProvidersTemp([]);
     setOpenForm(true);
   };
 
@@ -273,6 +300,7 @@ function Products() {
       "Seguro que deseas eliminar este producto?"
     );
     if (!confirmDelete) return;
+    setIsDeletingId(id);
 
     try {
       await deleteDoc(userDoc("products", id));
@@ -281,10 +309,12 @@ function Products() {
         setEditingProduct(null);
         clearForm();
       }
-      alert("Producto eliminado correctamente");
+      toast.success("Producto eliminado correctamente");
     } catch (error) {
       console.error(error);
-      alert("Error eliminando producto");
+      toast.error("Error eliminando producto");
+    } finally {
+      setIsDeletingId("");
     }
   };
 
@@ -383,11 +413,14 @@ function Products() {
                   </div>
                 )}
 
-                {editingProduct && (
-                  <SeccionDistribuidores
-                    producto={editingProduct}
-                  />
-                )}
+                <SeccionDistribuidores
+                  producto={editingProduct}
+                  draftProviders={providersTemp}
+                  onDraftProvidersChange={setProvidersTemp}
+                  medidaBaseOverride={medidaBase}
+                  medidaInternaOverride={medidaInterna}
+                  unidadesPorInternaOverride={unidadesPorInterna}
+                />
               </div>
 
               <div className="form-section">
@@ -614,12 +647,22 @@ function Products() {
               </div>
 
               <div className="form-actions">
-                <button type="submit">
-                  {editingProduct ? "Actualizar Producto" : "Agregar Producto"}
+                <button type="submit" disabled={isSaving}>
+                  {isSaving
+                    ? editingProduct
+                      ? "Actualizando..."
+                      : "Guardando..."
+                    : editingProduct
+                      ? "Actualizar Producto"
+                      : "Agregar Producto"}
                 </button>
                 {editingProduct && (
-                  <button type="button" onClick={() => handleDelete(editingProduct.id)}>
-                    Eliminar
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(editingProduct.id)}
+                    disabled={isDeletingId === editingProduct.id}
+                  >
+                    {isDeletingId === editingProduct.id ? "Eliminando..." : "Eliminar"}
                   </button>
                 )}
               </div>
@@ -633,5 +676,8 @@ function Products() {
 }
 
 export default Products;
+
+
+
 
 

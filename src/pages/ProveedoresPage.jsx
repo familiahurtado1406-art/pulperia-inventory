@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import {
   addDoc,
   deleteDoc,
@@ -9,6 +10,39 @@ import {
 import AppLayout from "../components/AppLayout";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 
+const DAY_OPTIONS = [
+  { value: 1, label: "Lunes" },
+  { value: 2, label: "Martes" },
+  { value: 3, label: "Miercoles" },
+  { value: 4, label: "Jueves" },
+  { value: 5, label: "Viernes" },
+  { value: 6, label: "Sabado" },
+  { value: 7, label: "Domingo" },
+];
+
+const DAY_BY_NAME = {
+  lunes: 1,
+  martes: 2,
+  miercoles: 3,
+  miércoles: 3,
+  jueves: 4,
+  viernes: 5,
+  sabado: 6,
+  sábado: 6,
+  domingo: 7,
+};
+
+const normalizeDay = (value, fallback = 1) => {
+  if (value === null || value === undefined || value === "") return fallback;
+  const asNumber = Number(value);
+  if (Number.isInteger(asNumber) && asNumber >= 1 && asNumber <= 7) return asNumber;
+  const fromName = DAY_BY_NAME[String(value).trim().toLowerCase()];
+  return fromName || fallback;
+};
+
+const dayLabel = (value) =>
+  DAY_OPTIONS.find((option) => option.value === normalizeDay(value, -1))?.label || "-";
+
 function ProveedoresPage() {
   const [proveedores, setProveedores] = useState([]);
   const [busqueda, setBusqueda] = useState("");
@@ -18,8 +52,14 @@ function ProveedoresPage() {
   const [nombreColaborador, setNombreColaborador] = useState("");
   const [telefono, setTelefono] = useState("");
   const [rutaCatalogo, setRutaCatalogo] = useState("");
+  const [diaEntrega, setDiaEntrega] = useState(4);
+  const [diaFacturacion, setDiaFacturacion] = useState(2);
+  const [frecuenciaEntregaDias, setFrecuenciaEntregaDias] = useState(7);
+  const [frecuenciaVisitaDias, setFrecuenciaVisitaDias] = useState(7);
   const [activo, setActivo] = useState(true);
   const [editingProveedor, setEditingProveedor] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const loadProveedores = async () => {
     const snapshot = await getDocs(userCollection("proveedores"));
@@ -35,6 +75,10 @@ function ProveedoresPage() {
     setNombreColaborador("");
     setTelefono("");
     setRutaCatalogo("");
+    setDiaEntrega(4);
+    setDiaFacturacion(2);
+    setFrecuenciaEntregaDias(7);
+    setFrecuenciaVisitaDias(7);
     setActivo(true);
     setEditingProveedor(null);
   };
@@ -57,36 +101,63 @@ function ProveedoresPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsSaving(true);
 
     try {
       if (editingProveedor) {
+        const diaEntregaValue = normalizeDay(diaEntrega, 4);
+        const diaFacturacionValue = normalizeDay(diaFacturacion, 2);
+        const frecuenciaEntregaValue = Number(frecuenciaEntregaDias || 7);
+        const frecuenciaVisitaValue = Number(frecuenciaVisitaDias || 7);
         await updateDoc(userDoc("proveedores", editingProveedor.id), {
           nombre,
           nombreColaborador,
           telefono,
           rutaCatalogo,
+          diaEntrega: diaEntregaValue,
+          dia_entrega: diaEntregaValue,
+          diaFacturacion: diaFacturacionValue,
+          dia_facturacion: diaFacturacionValue,
+          frecuenciaEntregaDias: frecuenciaEntregaValue,
+          frecuencia_entrega_dias: frecuenciaEntregaValue,
+          frecuenciaVisitaDias: frecuenciaVisitaValue,
+          frecuencia_visita_dias: frecuenciaVisitaValue,
           activo,
           updatedAt: serverTimestamp(),
         });
       } else {
+        const diaEntregaValue = normalizeDay(diaEntrega, 4);
+        const diaFacturacionValue = normalizeDay(diaFacturacion, 2);
+        const frecuenciaEntregaValue = Number(frecuenciaEntregaDias || 7);
+        const frecuenciaVisitaValue = Number(frecuenciaVisitaDias || 7);
         await addDoc(userCollection("proveedores"), {
           nombre,
           nombreColaborador,
           telefono,
           rutaCatalogo,
+          diaEntrega: diaEntregaValue,
+          dia_entrega: diaEntregaValue,
+          diaFacturacion: diaFacturacionValue,
+          dia_facturacion: diaFacturacionValue,
+          frecuenciaEntregaDias: frecuenciaEntregaValue,
+          frecuencia_entrega_dias: frecuenciaEntregaValue,
+          frecuenciaVisitaDias: frecuenciaVisitaValue,
+          frecuencia_visita_dias: frecuenciaVisitaValue,
           activo,
           createdAt: serverTimestamp(),
         });
       }
 
-      alert("Proveedor guardado correctamente");
+      toast.success("Proveedor guardado correctamente");
       resetForm();
       setOpenForm(false);
       const data = await loadProveedores();
       setProveedores(data);
     } catch (error) {
       console.error(error);
-      alert("Error creando proveedor");
+      toast.error("Error guardando proveedor");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -96,6 +167,18 @@ function ProveedoresPage() {
     setNombreColaborador(proveedor.nombreColaborador || "");
     setTelefono(proveedor.telefono || "");
     setRutaCatalogo(proveedor.rutaCatalogo || "");
+    setDiaEntrega(
+      normalizeDay(proveedor.diaEntrega ?? proveedor.dia_entrega, 4)
+    );
+    setDiaFacturacion(
+      normalizeDay(proveedor.diaFacturacion ?? proveedor.dia_facturacion, 2)
+    );
+    setFrecuenciaEntregaDias(
+      Number(proveedor.frecuenciaEntregaDias ?? proveedor.frecuencia_entrega_dias ?? 7)
+    );
+    setFrecuenciaVisitaDias(
+      Number(proveedor.frecuenciaVisitaDias ?? proveedor.frecuencia_visita_dias ?? 7)
+    );
     setActivo(proveedor.activo !== false);
     setOpenForm(true);
   };
@@ -103,10 +186,11 @@ function ProveedoresPage() {
   const handleDelete = async (id) => {
     const confirmDelete = window.confirm("Seguro que deseas eliminar este proveedor?");
     if (!confirmDelete) return;
+    setIsDeleting(true);
 
     try {
       await deleteDoc(userDoc("proveedores", id));
-      alert("Proveedor eliminado correctamente");
+      toast.success("Proveedor eliminado correctamente");
 
       if (editingProveedor?.id === id) {
         resetForm();
@@ -117,7 +201,9 @@ function ProveedoresPage() {
       setProveedores(data);
     } catch (error) {
       console.error(error);
-      alert("Error eliminando proveedor");
+      toast.error("Error eliminando proveedor");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -156,13 +242,28 @@ function ProveedoresPage() {
             <p>Colaborador: {prov.nombreColaborador || "-"}</p>
             <p>Telefono: {prov.telefono || "-"}</p>
             <p>Ruta: {prov.rutaCatalogo || "-"}</p>
+            <p>Dia entrega: {dayLabel(prov.diaEntrega ?? prov.dia_entrega)}</p>
+            <p>Dia facturacion: {dayLabel(prov.diaFacturacion ?? prov.dia_facturacion)}</p>
+            <p>
+              Frecuencia entrega:{" "}
+              {Number(prov.frecuenciaEntregaDias ?? prov.frecuencia_entrega_dias ?? 7)} dias
+            </p>
+            <p>
+              Frecuencia visita:{" "}
+              {Number(prov.frecuenciaVisitaDias ?? prov.frecuencia_visita_dias ?? 7)} dias
+            </p>
 
             <div className="history-actions">
               <button type="button" className="btn-secondary" onClick={() => handleEdit(prov)}>
                 Editar
               </button>
-              <button type="button" className="btn-primary" onClick={() => handleDelete(prov.id)}>
-                Eliminar
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => handleDelete(prov.id)}
+                disabled={isDeleting}
+              >
+                {isDeleting ? "Eliminando..." : "Eliminar"}
               </button>
             </div>
           </div>
@@ -212,6 +313,65 @@ function ProveedoresPage() {
                 />
               </div>
 
+              <div className="form-section">
+                <h4>Logistica de proveedor</h4>
+                <div className="input-group">
+                  <label>Dia de entrega</label>
+                  <select
+                    className="input-modern"
+                    value={diaEntrega}
+                    onChange={(e) => setDiaEntrega(Number(e.target.value))}
+                  >
+                    {DAY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label>Dia de pedido / facturacion</label>
+                  <select
+                    className="input-modern"
+                    value={diaFacturacion}
+                    onChange={(e) => setDiaFacturacion(Number(e.target.value))}
+                  >
+                    {DAY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label>Frecuencia de entrega (dias)</label>
+                  <input
+                    className="input-modern"
+                    type="number"
+                    min="1"
+                    value={frecuenciaEntregaDias}
+                    onChange={(e) =>
+                      setFrecuenciaEntregaDias(Number(e.target.value || 1))
+                    }
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label>Frecuencia visita vendedor (dias)</label>
+                  <input
+                    className="input-modern"
+                    type="number"
+                    min="1"
+                    value={frecuenciaVisitaDias}
+                    onChange={(e) =>
+                      setFrecuenciaVisitaDias(Number(e.target.value || 1))
+                    }
+                  />
+                </div>
+              </div>
+
               <div className="input-group">
                 <label>
                   <input
@@ -234,8 +394,8 @@ function ProveedoresPage() {
                 >
                   Cancelar
                 </button>
-                <button type="submit" className="btn-primary">
-                  Guardar
+                <button type="submit" className="btn-primary" disabled={isSaving}>
+                  {isSaving ? "Guardando..." : "Guardar"}
                 </button>
               </div>
             </form>

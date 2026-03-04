@@ -1,5 +1,5 @@
-import { Timestamp, getDocs, query, where } from "firebase/firestore";
-import { userCollection } from "./userScopedFirestore";
+import { Timestamp, getDocs, query, updateDoc, where } from "firebase/firestore";
+import { userCollection, userDoc } from "./userScopedFirestore";
 
 const toMillis = (value) => {
   if (!value) return 0;
@@ -24,9 +24,9 @@ const toDate = (value) => {
 const getStockBase = (product) =>
   Number(product?.stockBase ?? product?.stockUnidades ?? product?.stockActual ?? 0);
 
-const classifyRotation = (rotacionSemanal) => {
-  if (rotacionSemanal > 10) return "alta";
-  if (rotacionSemanal > 4) return "media";
+const classifyRotation = (promedioDiario) => {
+  if (promedioDiario >= 5) return "alta";
+  if (promedioDiario >= 1) return "media";
   return "baja";
 };
 
@@ -34,6 +34,19 @@ const classifyTrend = (currentAvg, previousAvg) => {
   if (currentAvg > previousAvg * 1.15) return "creciente";
   if (currentAvg < previousAvg * 0.85) return "decreciente";
   return "estable";
+};
+
+const classifyStockAlert = (diasStock) => {
+  if (!Number.isFinite(diasStock)) return "sin_ventas";
+  if (diasStock >= 15) return "ok";
+  if (diasStock >= 7) return "advertencia";
+  return "urgente";
+};
+
+const classifySellThrough = (sellThroughPercent) => {
+  if (sellThroughPercent > 80) return "caliente";
+  if (sellThroughPercent >= 40) return "saludable";
+  return "lento";
 };
 
 const classifyDeliverySpeed = (avgDays) => {
@@ -208,13 +221,14 @@ export const getComprasAnalytics = async () => {
 
 export const getInventoryMovementAnalytics = async (days = 30, options = {}) => {
   const lookbackDays = Number(days || 30);
-  const daysCoverage = Number(options.daysCoverage || 10);
+  const daysCoverage = Number(options.daysCoverage || 15);
   const forecastDays = Number(options.forecastDays || 5);
   const cacheTtlMs = Number(options.cacheTtlMs || 90 * 1000);
   const cacheKey = JSON.stringify({
     lookbackDays,
     daysCoverage,
     forecastDays,
+    syncRotationToProducts: !!options.syncRotationToProducts,
   });
 
   const now = Date.now();
@@ -241,6 +255,23 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
       getDocs(userCollection("proveedor_producto")),
       getDocs(userCollection("proveedorProducto")),
     ]);
+  let movimientosSalida = [];
+  try {
+    const movementsSnap = await getDocs(
+      query(
+        userCollection("movimientos"),
+        where("type", "==", "salida"),
+        where("createdAt", ">=", Timestamp.fromDate(monthAgoDate))
+      )
+    );
+    movimientosSalida = movementsSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+  } catch {
+    const movementsSnap = await getDocs(userCollection("movimientos"));
+    movimientosSalida = movementsSnap.docs
+      .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+      .filter((movement) => String(movement.type || "").toLowerCase() === "salida")
+      .filter((movement) => toMillis(movement.createdAt || movement.fecha) >= monthAgo);
+  }
 
   const products = productsSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
   const proveedores = proveedoresSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
@@ -277,13 +308,8 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
 
   const rotationByProduct = {};
   const dailySalesByProduct = {};
-  history.forEach((movement) => {
-    const difference = Number(movement.diferencia || 0);
-    if (movement.tipoMovimiento !== "conteo" || difference >= 0) return;
-
-    const productId = String(movement.productoId || "");
-    if (!productId) return;
-
+  const registerSale = ({ productId, sold, movementMillis, movementDate }) => {
+    if (!productId || sold <= 0) return;
     if (!rotationByProduct[productId]) {
       rotationByProduct[productId] = {
         semanal: 0,
@@ -294,11 +320,7 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
     }
     if (!dailySalesByProduct[productId]) dailySalesByProduct[productId] = {};
 
-    const sold = Math.abs(difference);
-    const movementMillis = toMillis(movement.fecha);
-    const movementDate = toDate(movement.fecha);
     const dayKey = movementDate ? movementDate.toISOString().slice(0, 10) : "";
-
     if (movementMillis >= monthAgo) rotationByProduct[productId].mensual += sold;
     if (movementMillis >= weekAgo) rotationByProduct[productId].semanal += sold;
     if (movementMillis >= weekAgo) rotationByProduct[productId].semanaActual += sold;
@@ -309,7 +331,60 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
       dailySalesByProduct[productId][dayKey] =
         Number(dailySalesByProduct[productId][dayKey] || 0) + sold;
     }
+  };
+
+  const pickMovementQty = (entry) => {
+    const qty = Number(
+      entry?.unidades ??
+        entry?.cantidadBase ??
+        entry?.cantidad ??
+        entry?.cantidadVendida ??
+        entry?.qty ??
+        0
+    );
+    return Number.isFinite(qty) ? qty : 0;
+  };
+  const pickMovementProductId = (entry) =>
+    String(entry?.productDocId || entry?.productoId || entry?.productId || entry?.id || "");
+
+  movimientosSalida.forEach((movement) => {
+    const movementMillis = toMillis(movement.createdAt || movement.fecha);
+    const movementDate = toDate(movement.createdAt || movement.fecha);
+    if (movementMillis < monthAgo) return;
+
+    if (Array.isArray(movement.items) && movement.items.length > 0) {
+      movement.items.forEach((item) => {
+        registerSale({
+          productId: pickMovementProductId(item),
+          sold: Math.max(0, pickMovementQty(item)),
+          movementMillis,
+          movementDate,
+        });
+      });
+      return;
+    }
+
+    registerSale({
+      productId: pickMovementProductId(movement),
+      sold: Math.max(0, pickMovementQty(movement)),
+      movementMillis,
+      movementDate,
+    });
   });
+
+  // Compatibility fallback while some deployments still infer sales from conteos.
+  if (Object.keys(rotationByProduct).length === 0) {
+    history.forEach((movement) => {
+      const difference = Number(movement.diferencia || 0);
+      if (movement.tipoMovimiento !== "conteo" || difference >= 0) return;
+      registerSale({
+        productId: String(movement.productoId || ""),
+        sold: Math.abs(difference),
+        movementMillis: toMillis(movement.fecha),
+        movementDate: toDate(movement.fecha),
+      });
+    });
+  }
 
   const rankingBase = products
     .filter((product) => product.activo !== false)
@@ -332,6 +407,19 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
       const sugerirSubirStockObjetivo = stockRecomendado > stockObjetivo;
       const gananciaUnidad = Number(product.gananciaUnidad || 0);
       const rentabilidad = Number((rotacionMensual * gananciaUnidad).toFixed(2));
+      const diasStockRestantes =
+        promedioDiario > 0 ? Number((stockBase / promedioDiario).toFixed(2)) : Infinity;
+      const cantidadComprar = Number(Math.max(0, stockRecomendado - stockBase).toFixed(2));
+      const sellThrough30 =
+        stockBase > 0 ? Number(((rotacionMensual / stockBase) * 100).toFixed(2)) : 0;
+      const unidadesPorPack = Number(product.unidadesPorInterna ?? product.unidadesPorPack ?? 0);
+      const packsRecomendados =
+        unidadesPorPack > 0 ? Math.floor(cantidadComprar / unidadesPorPack) : 0;
+      const unidadesSueltasRecomendadas =
+        unidadesPorPack > 0
+          ? Number((cantidadComprar - packsRecomendados * unidadesPorPack).toFixed(2))
+          : cantidadComprar;
+      const nivelStock = classifyStockAlert(diasStockRestantes);
 
       return {
         id: product.id,
@@ -353,11 +441,34 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
         demandaProximosDias,
         stockRecomendado,
         sugerirSubirStockObjetivo,
+        diasStockRestantes,
+        nivelStock,
+        objetivoStockDias: daysCoverage,
+        cantidadComprar,
+        sellThrough30,
+        sellThroughCategoria: classifySellThrough(sellThrough30),
+        unidadesPorPack: unidadesPorPack > 0 ? unidadesPorPack : null,
+        packsRecomendados,
+        unidadesSueltasRecomendadas,
         ventasDiarias: dailySalesByProduct[productoId] || {},
-        rotacionTipo: classifyRotation(rotacionSemanal),
+        rotacionTipo: classifyRotation(promedioDiario),
         rentabilidadMensual: rentabilidad,
       };
     });
+
+  if (options.syncRotationToProducts) {
+    const updates = rankingBase
+      .filter((item) => {
+        const current = products.find((p) => String(p.id) === String(item.id));
+        return String(current?.tipoRotacion || "") !== String(item.rotacionTipo || "");
+      })
+      .map((item) =>
+        updateDoc(userDoc("products", item.id), {
+          tipoRotacion: item.rotacionTipo,
+        })
+      );
+    await Promise.all(updates);
+  }
 
   const rankingMayorRotacion = [...rankingBase].sort(
     (a, b) => b.rotacionSemanal - a.rotacionSemanal
@@ -426,8 +537,29 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
       };
     })
     .sort((a, b) => a.promedioEntregaDias - b.promedioEntregaDias);
+  const inversionInventarioTotal = rankingBase.reduce((acc, item) => {
+    const product = products.find((p) => String(p.id) === String(item.id));
+    const costoUnitario = Number(
+      product?.costoUnitarioBase ?? product?.costoUnitario ?? 0
+    );
+    return acc + Number(item.stockBase || 0) * (costoUnitario > 0 ? costoUnitario : 0);
+  }, 0);
+  const ventasDiariasTotales = rankingBase.reduce(
+    (acc, item) => acc + Number(item.promedioDiario || 0),
+    0
+  );
+  const stockTotal = rankingBase.reduce((acc, item) => acc + Number(item.stockBase || 0), 0);
+  const diasInventarioPromedio =
+    ventasDiariasTotales > 0 ? Number((stockTotal / ventasDiariasTotales).toFixed(2)) : null;
+  const productosCalientes = rankingBase.filter(
+    (item) => item.sellThroughCategoria === "caliente"
+  ).length;
+  const productosSellThroughLento = rankingBase.filter(
+    (item) => item.sellThroughCategoria === "lento"
+  ).length;
 
   const response = {
+    productosAnalizados: rankingBase,
     topRotacion: rankingMayorRotacion.slice(0, 10),
     bajaRotacion: rankingMenorRotacion.slice(0, 10),
     inventarioMuerto: candidatosEliminar,
@@ -444,6 +576,10 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
       lookbackDays,
     },
     stats: {
+      inversionInventarioTotal: Number(inversionInventarioTotal.toFixed(2)),
+      diasInventarioPromedio,
+      productosCalientesCount: productosCalientes,
+      productosSellThroughLentoCount: productosSellThroughLento,
       topRotacionCount: rankingMayorRotacion.slice(0, 10).length,
       bajaRotacionCount: rankingMenorRotacion.slice(0, 10).length,
       inventarioMuertoCount: candidatosEliminar.length,

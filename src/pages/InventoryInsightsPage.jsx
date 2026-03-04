@@ -18,6 +18,20 @@ const rotacionLabel = (tipo) => {
   return "Baja";
 };
 
+const stockAlertLabel = (nivel) => {
+  if (nivel === "ok") return "Stock saludable";
+  if (nivel === "advertencia") return "Reponer pronto";
+  if (nivel === "urgente") return "Comprar urgente";
+  return "Sin ventas";
+};
+
+const stockAlertClass = (nivel) => {
+  if (nivel === "ok") return "alta";
+  if (nivel === "advertencia") return "media";
+  if (nivel === "urgente") return "baja";
+  return "media";
+};
+
 function InventoryInsightsPage() {
   const { type } = useParams();
   const [loading, setLoading] = useState(true);
@@ -27,7 +41,9 @@ function InventoryInsightsPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const data = await getInventoryMovementAnalytics(30);
+        const data = await getInventoryMovementAnalytics(30, {
+          syncRotationToProducts: true,
+        });
         setAnalytics(data);
       } finally {
         setLoading(false);
@@ -75,6 +91,11 @@ function InventoryInsightsPage() {
                 {!!item.estadoEntrega && (
                   <span className={`badge-rotacion ${item.estadoEntrega === "lento" ? "baja" : "alta"}`}>
                     {item.estadoEntrega}
+                  </span>
+                )}
+                {"nivelStock" in item && (
+                  <span className={`badge-rotacion ${stockAlertClass(item.nivelStock)}`}>
+                    {stockAlertLabel(item.nivelStock)}
                   </span>
                 )}
               </div>
@@ -125,6 +146,26 @@ function InventoryInsightsPage() {
                 {"stockBase" in item && (
                   <p>
                     <strong>Stock actual:</strong> {Number(item.stockBase || 0).toFixed(2)} UN
+                  </p>
+                )}
+                {"diasStockRestantes" in item && (
+                  <p>
+                    <strong>Stock dura:</strong>{" "}
+                    {Number.isFinite(Number(item.diasStockRestantes))
+                      ? `${Number(item.diasStockRestantes || 0).toFixed(2)} dias`
+                      : "Sin ventas registradas"}
+                  </p>
+                )}
+                {"cantidadComprar" in item && Number(item.cantidadComprar || 0) > 0 && (
+                  <p>
+                    <strong>Pedido recomendado:</strong>{" "}
+                    {item.unidadesPorPack
+                      ? `${Number(item.packsRecomendados || 0)} PACK + ${Number(
+                          item.unidadesSueltasRecomendadas || 0
+                        ).toFixed(2)} UN`
+                      : `${Number(item.cantidadComprar || 0).toFixed(2)} UN`}
+                    {"  "}
+                    ({Number(item.objetivoStockDias || 15)} dias objetivo)
                   </p>
                 )}
                 {"rentabilidadMensual" in item && (
