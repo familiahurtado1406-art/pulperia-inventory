@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   addDoc,
@@ -21,6 +22,7 @@ const getTomorrowIsoDate = () => {
 };
 
 function RealizarPedido() {
+  const location = useLocation();
   const [proveedores, setProveedores] = useState([]);
   const [historialPedidos, setHistorialPedidos] = useState([]);
   const [proveedorSeleccionado, setProveedorSeleccionado] = useState("");
@@ -131,6 +133,12 @@ function RealizarPedido() {
 
     fetchInitialData();
   }, []);
+
+  useEffect(() => {
+    const preselectedProveedorId = String(location.state?.proveedorId || "");
+    if (!preselectedProveedorId) return;
+    setProveedorSeleccionado((prev) => prev || preselectedProveedorId);
+  }, [location.state]);
 
   useEffect(() => {
     const fetchProductosProveedor = async () => {

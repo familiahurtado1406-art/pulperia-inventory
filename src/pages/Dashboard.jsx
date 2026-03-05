@@ -26,6 +26,13 @@ const normalizeProviderDay = (value) => {
   return dayMap[String(value || "").trim().toLowerCase()] || null;
 };
 
+const normalizeProviderDays = (values, fallbackValue) => {
+  const source = Array.isArray(values) ? values : [values ?? fallbackValue];
+  return source
+    .map((value) => normalizeProviderDay(value))
+    .filter((value) => Number.isInteger(value) && value >= 1 && value <= 7);
+};
+
 const dayDistance = (fromDay, toDay) => {
   if (!fromDay || !toDay) return null;
   const diff = (toDay - fromDay + 7) % 7;
@@ -83,17 +90,27 @@ function Dashboard() {
   const today = toDayNumber(new Date());
   const providersActivos = providers.filter((provider) => provider.activo !== false);
   const entregasHoy = providersActivos.filter(
-    (provider) => normalizeProviderDay(provider.diaEntrega ?? provider.dia_entrega) === today
+    (provider) =>
+      normalizeProviderDays(
+        provider.diasEntrega,
+        provider.diaEntrega ?? provider.dia_entrega
+      ).includes(today)
   );
   const pedidosHoy = providersActivos.filter(
     (provider) =>
-      normalizeProviderDay(provider.diaFacturacion ?? provider.dia_facturacion) === today
+      normalizeProviderDays(
+        provider.diasPedido,
+        provider.diaFacturacion ?? provider.dia_facturacion
+      ).includes(today)
   );
 
   const pedidosUrgentes = productos.filter((product) => {
     const provider = providerById[String(product.proveedorId || "")];
     if (!provider) return false;
-    const deliveryDay = normalizeProviderDay(provider.diaEntrega ?? provider.dia_entrega);
+    const [deliveryDay] = normalizeProviderDays(
+      provider.diasEntrega,
+      provider.diaEntrega ?? provider.dia_entrega
+    );
     const diasHastaEntrega = dayDistance(today, deliveryDay);
     if (diasHastaEntrega === null) return false;
     const diasStock = Number(product.diasStockRestantes);
@@ -152,7 +169,7 @@ function Dashboard() {
             </span>
           </button>
 
-          <button type="button" className="dashboard-card" onClick={() => navigate("/proveedores")}>
+          <button type="button" className="dashboard-card" onClick={() => navigate("/pedidos-hoy")}>
             <div>📋 Pedidos por hacer</div>
             <h2>{pedidosHoy.length}</h2>
             <span className={`badge-rotacion ${pedidosHoy.length > 0 ? "media" : "alta"}`}>

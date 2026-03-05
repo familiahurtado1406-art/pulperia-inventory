@@ -11,6 +11,7 @@ import HistorialPedidos from "./pages/HistorialPedidos";
 import HistorialCambios from "./pages/HistorialCambios";
 import InventoryInsightsPage from "./pages/InventoryInsightsPage";
 import ProductoDetalles from "./pages/ProductoDetalles";
+import PedidosHoyPage from "./pages/PedidosHoyPage";
 import Login from "./pages/Login";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -93,6 +94,16 @@ function App() {
               <ProtectedRoute>
                 <AppLayout title="Realizar Pedido">
                   <RealizarPedido />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/pedidos-hoy"
+            element={
+              <ProtectedRoute>
+                <AppLayout title="Pedidos de hoy">
+                  <PedidosHoyPage />
                 </AppLayout>
               </ProtectedRoute>
             }

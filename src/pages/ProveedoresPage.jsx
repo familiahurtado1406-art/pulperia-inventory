@@ -40,8 +40,18 @@ const normalizeDay = (value, fallback = 1) => {
   return fromName || fallback;
 };
 
-const dayLabel = (value) =>
-  DAY_OPTIONS.find((option) => option.value === normalizeDay(value, -1))?.label || "-";
+const normalizeDayList = (value, fallback = 1) => {
+  if (Array.isArray(value) && value.length > 0) {
+    return [...new Set(value.map((item) => normalizeDay(item, fallback)))].sort((a, b) => a - b);
+  }
+  return [normalizeDay(value, fallback)];
+};
+
+const dayLabels = (values) =>
+  normalizeDayList(values, 1)
+    .map((value) => DAY_OPTIONS.find((option) => option.value === value)?.label)
+    .filter(Boolean)
+    .join(", ");
 
 function ProveedoresPage() {
   const [proveedores, setProveedores] = useState([]);
@@ -52,8 +62,8 @@ function ProveedoresPage() {
   const [nombreColaborador, setNombreColaborador] = useState("");
   const [telefono, setTelefono] = useState("");
   const [rutaCatalogo, setRutaCatalogo] = useState("");
-  const [diaEntrega, setDiaEntrega] = useState(4);
-  const [diaFacturacion, setDiaFacturacion] = useState(2);
+  const [diasEntrega, setDiasEntrega] = useState([4]);
+  const [diasPedido, setDiasPedido] = useState([2]);
   const [frecuenciaEntregaDias, setFrecuenciaEntregaDias] = useState(7);
   const [frecuenciaVisitaDias, setFrecuenciaVisitaDias] = useState(7);
   const [activo, setActivo] = useState(true);
@@ -75,8 +85,8 @@ function ProveedoresPage() {
     setNombreColaborador("");
     setTelefono("");
     setRutaCatalogo("");
-    setDiaEntrega(4);
-    setDiaFacturacion(2);
+    setDiasEntrega([4]);
+    setDiasPedido([2]);
     setFrecuenciaEntregaDias(7);
     setFrecuenciaVisitaDias(7);
     setActivo(true);
@@ -104,9 +114,12 @@ function ProveedoresPage() {
     setIsSaving(true);
 
     try {
+      const diasEntregaValue = normalizeDayList(diasEntrega, 4);
+      const diasPedidoValue = normalizeDayList(diasPedido, 2);
+      const diaEntregaValue = diasEntregaValue[0] || 4;
+      const diaFacturacionValue = diasPedidoValue[0] || 2;
+
       if (editingProveedor) {
-        const diaEntregaValue = normalizeDay(diaEntrega, 4);
-        const diaFacturacionValue = normalizeDay(diaFacturacion, 2);
         const frecuenciaEntregaValue = Number(frecuenciaEntregaDias || 7);
         const frecuenciaVisitaValue = Number(frecuenciaVisitaDias || 7);
         await updateDoc(userDoc("proveedores", editingProveedor.id), {
@@ -116,8 +129,10 @@ function ProveedoresPage() {
           rutaCatalogo,
           diaEntrega: diaEntregaValue,
           dia_entrega: diaEntregaValue,
+          diasEntrega: diasEntregaValue,
           diaFacturacion: diaFacturacionValue,
           dia_facturacion: diaFacturacionValue,
+          diasPedido: diasPedidoValue,
           frecuenciaEntregaDias: frecuenciaEntregaValue,
           frecuencia_entrega_dias: frecuenciaEntregaValue,
           frecuenciaVisitaDias: frecuenciaVisitaValue,
@@ -126,8 +141,6 @@ function ProveedoresPage() {
           updatedAt: serverTimestamp(),
         });
       } else {
-        const diaEntregaValue = normalizeDay(diaEntrega, 4);
-        const diaFacturacionValue = normalizeDay(diaFacturacion, 2);
         const frecuenciaEntregaValue = Number(frecuenciaEntregaDias || 7);
         const frecuenciaVisitaValue = Number(frecuenciaVisitaDias || 7);
         await addDoc(userCollection("proveedores"), {
@@ -137,8 +150,10 @@ function ProveedoresPage() {
           rutaCatalogo,
           diaEntrega: diaEntregaValue,
           dia_entrega: diaEntregaValue,
+          diasEntrega: diasEntregaValue,
           diaFacturacion: diaFacturacionValue,
           dia_facturacion: diaFacturacionValue,
+          diasPedido: diasPedidoValue,
           frecuenciaEntregaDias: frecuenciaEntregaValue,
           frecuencia_entrega_dias: frecuenciaEntregaValue,
           frecuenciaVisitaDias: frecuenciaVisitaValue,
@@ -167,11 +182,14 @@ function ProveedoresPage() {
     setNombreColaborador(proveedor.nombreColaborador || "");
     setTelefono(proveedor.telefono || "");
     setRutaCatalogo(proveedor.rutaCatalogo || "");
-    setDiaEntrega(
-      normalizeDay(proveedor.diaEntrega ?? proveedor.dia_entrega, 4)
+    setDiasEntrega(
+      normalizeDayList(proveedor.diasEntrega ?? proveedor.diaEntrega ?? proveedor.dia_entrega, 4)
     );
-    setDiaFacturacion(
-      normalizeDay(proveedor.diaFacturacion ?? proveedor.dia_facturacion, 2)
+    setDiasPedido(
+      normalizeDayList(
+        proveedor.diasPedido ?? proveedor.diaFacturacion ?? proveedor.dia_facturacion,
+        2
+      )
     );
     setFrecuenciaEntregaDias(
       Number(proveedor.frecuenciaEntregaDias ?? proveedor.frecuencia_entrega_dias ?? 7)
@@ -181,6 +199,14 @@ function ProveedoresPage() {
     );
     setActivo(proveedor.activo !== false);
     setOpenForm(true);
+  };
+
+  const toggleDay = (dayValue, currentList, setList) => {
+    if (currentList.includes(dayValue)) {
+      setList(currentList.filter((value) => value !== dayValue));
+      return;
+    }
+    setList([...currentList, dayValue].sort((a, b) => a - b));
   };
 
   const handleDelete = async (id) => {
@@ -242,8 +268,14 @@ function ProveedoresPage() {
             <p>Colaborador: {prov.nombreColaborador || "-"}</p>
             <p>Telefono: {prov.telefono || "-"}</p>
             <p>Ruta: {prov.rutaCatalogo || "-"}</p>
-            <p>Dia entrega: {dayLabel(prov.diaEntrega ?? prov.dia_entrega)}</p>
-            <p>Dia facturacion: {dayLabel(prov.diaFacturacion ?? prov.dia_facturacion)}</p>
+            <p>
+              Dias entrega:{" "}
+              {dayLabels(prov.diasEntrega ?? prov.diaEntrega ?? prov.dia_entrega) || "-"}
+            </p>
+            <p>
+              Dias pedido:{" "}
+              {dayLabels(prov.diasPedido ?? prov.diaFacturacion ?? prov.dia_facturacion) || "-"}
+            </p>
             <p>
               Frecuencia entrega:{" "}
               {Number(prov.frecuenciaEntregaDias ?? prov.frecuencia_entrega_dias ?? 7)} dias
@@ -316,33 +348,59 @@ function ProveedoresPage() {
               <div className="form-section">
                 <h4>Logistica de proveedor</h4>
                 <div className="input-group">
-                  <label>Dia de entrega</label>
-                  <select
-                    className="input-modern"
-                    value={diaEntrega}
-                    onChange={(e) => setDiaEntrega(Number(e.target.value))}
-                  >
+                  <label>Dias de entrega</label>
+                  <div className="row" style={{ gap: "8px" }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setDiasEntrega(DAY_OPTIONS.map((option) => option.value))}
+                    >
+                      Seleccionar todos
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={() => setDiasEntrega([])}>
+                      Limpiar
+                    </button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
                     {DAY_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
+                      <label key={`entrega-${option.value}`}>
+                        <input
+                          type="checkbox"
+                          checked={diasEntrega.includes(option.value)}
+                          onChange={() => toggleDay(option.value, diasEntrega, setDiasEntrega)}
+                        />{" "}
                         {option.label}
-                      </option>
+                      </label>
                     ))}
-                  </select>
+                  </div>
                 </div>
 
                 <div className="input-group">
-                  <label>Dia de pedido / facturacion</label>
-                  <select
-                    className="input-modern"
-                    value={diaFacturacion}
-                    onChange={(e) => setDiaFacturacion(Number(e.target.value))}
-                  >
+                  <label>Dias de pedido / facturacion</label>
+                  <div className="row" style={{ gap: "8px" }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setDiasPedido(DAY_OPTIONS.map((option) => option.value))}
+                    >
+                      Seleccionar todos
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={() => setDiasPedido([])}>
+                      Limpiar
+                    </button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
                     {DAY_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
+                      <label key={`pedido-${option.value}`}>
+                        <input
+                          type="checkbox"
+                          checked={diasPedido.includes(option.value)}
+                          onChange={() => toggleDay(option.value, diasPedido, setDiasPedido)}
+                        />{" "}
                         {option.label}
-                      </option>
+                      </label>
                     ))}
-                  </select>
+                  </div>
                 </div>
 
                 <div className="input-group">
