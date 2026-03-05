@@ -447,9 +447,7 @@ function Products() {
                     <option value="UN">UN</option>
                     <option value="LB">LB</option>
                     <option value="LT">LT</option>
-                    <option value="PACK">PACK</option>
-                    <option value="CAJA">CAJA</option>
-                    <option value="BOLSON">BOLSON</option>
+                    <option value="YARDA">YARDA</option>
                   </select>
                   <small>Unidad real donde vive el stock.</small>
                 </div>
@@ -471,8 +469,10 @@ function Products() {
                     required
                   >
                     <option value="PACK">PACK</option>
-                    <option value="BOLSON">BOLSON</option>
                     <option value="CAJA">CAJA</option>
+                    <option value="BOLSON">BOLSON</option>
+                    <option value="DOCENA">DOCENA</option>
+                    <option value="RISTRA">RISTRA</option>
                     <option value="QQ">QQ</option>
                     <option value="1/2QQ">1/2 QQ</option>
                     <option value="@">@</option>

@@ -9,6 +9,7 @@ function Conteo() {
   const [proveedores, setProveedores] = useState([]);
   const [selectedProveedorId, setSelectedProveedorId] = useState("todos");
   const [conteos, setConteos] = useState({});
+  const [adicionalesConteo, setAdicionalesConteo] = useState({});
   const [medidasConteo, setMedidasConteo] = useState({});
   const [productCollectionById, setProductCollectionById] = useState({});
 
@@ -110,6 +111,35 @@ function Conteo() {
     return { label: "OK", color: "green" };
   };
 
+  const handleMedidaChange = (productId, value) => {
+    setMedidasConteo((prev) => ({ ...prev, [productId]: value }));
+    setConteos((prev) => ({ ...prev, [productId]: "" }));
+    setAdicionalesConteo((prev) => ({ ...prev, [productId]: "" }));
+  };
+
+  const getConteoCalculado = (product) => {
+    const medidaSeleccionada = medidasConteo[product.id] || "base";
+    const unidadesPorInterna = getUnidadesPorInterna(product);
+    const cantidadRaw = conteos[product.id] ?? String(getStockBase(product));
+    const cantidadContada = Number(cantidadRaw || 0);
+    const adicionalesRaw = adicionalesConteo[product.id] ?? "";
+    const adicionales = Number(adicionalesRaw || 0);
+    const totalBase =
+      medidaSeleccionada === "interna"
+        ? cantidadContada * unidadesPorInterna + adicionales
+        : cantidadContada + adicionales;
+
+    return {
+      medidaSeleccionada,
+      unidadesPorInterna,
+      cantidadRaw,
+      cantidadContada,
+      adicionalesRaw,
+      adicionales,
+      totalBase,
+    };
+  };
+
   const handleSaveCount = async (product) => {
     const cantidadRaw = conteos[product.id];
     if (cantidadRaw === undefined || cantidadRaw === "") {
@@ -117,19 +147,14 @@ function Conteo() {
       return;
     }
 
-    const cantidadContada = Number(cantidadRaw);
-    const medidaSeleccionada = medidasConteo[product.id] || "base";
-    const unidadesPorInterna = getUnidadesPorInterna(product);
+    const { medidaSeleccionada, unidadesPorInterna, totalBase } = getConteoCalculado(product);
 
     if (medidaSeleccionada === "interna" && unidadesPorInterna <= 0) {
       alert("Este producto no tiene equivalencia interna configurada");
       return;
     }
 
-    const equivalenteBase =
-      medidaSeleccionada === "interna"
-        ? cantidadContada * unidadesPorInterna
-        : cantidadContada;
+    const equivalenteBase = totalBase;
     const stockAnterior = getStockBase(product);
 
     try {
@@ -195,6 +220,7 @@ function Conteo() {
                     <th>Nombre</th>
                     <th>Medida</th>
                     <th>Cantidad</th>
+                    <th>UN adicionales</th>
                     <th>Equivalente base</th>
                     <th>Estado</th>
                     <th>Recomendado</th>
@@ -203,13 +229,14 @@ function Conteo() {
                 </thead>
                 <tbody>
                   {visibleProducts.map((product) => {
-                    const medidaSeleccionada = medidasConteo[product.id] || "base";
-                    const unidadesPorInterna = getUnidadesPorInterna(product);
-                    const cantidadContada = conteos[product.id] ?? String(getStockBase(product));
-                    const equivalenteBase =
-                      medidaSeleccionada === "interna"
-                        ? Number(cantidadContada || 0) * unidadesPorInterna
-                        : Number(cantidadContada || 0);
+                    const {
+                      medidaSeleccionada,
+                      unidadesPorInterna,
+                      cantidadRaw,
+                      adicionalesRaw,
+                      totalBase,
+                    } = getConteoCalculado(product);
+                    const equivalenteBase = Number(totalBase || 0);
                     const recomendado = calcularRecomendacion(product, equivalenteBase);
                     const estado = getStockEstado(product, equivalenteBase);
                     const recomendadoInterna =
@@ -222,9 +249,7 @@ function Conteo() {
                           <select
                             className="input-modern"
                             value={medidaSeleccionada}
-                            onChange={(e) =>
-                              setMedidasConteo((prev) => ({ ...prev, [product.id]: e.target.value }))
-                            }
+                            onChange={(e) => handleMedidaChange(product.id, e.target.value)}
                           >
                             <option value="base">{product.medidaBase || "UN"}</option>
                             {product.medidaInterna && (
@@ -237,9 +262,23 @@ function Conteo() {
                             className="input-modern"
                             type="number"
                             step="any"
-                            value={cantidadContada}
+                            value={cantidadRaw}
                             onChange={(e) =>
                               setConteos((prev) => ({ ...prev, [product.id]: e.target.value }))
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="input-modern"
+                            type="number"
+                            step="any"
+                            value={adicionalesRaw}
+                            onChange={(e) =>
+                              setAdicionalesConteo((prev) => ({
+                                ...prev,
+                                [product.id]: e.target.value,
+                              }))
                             }
                           />
                         </td>
@@ -271,14 +310,15 @@ function Conteo() {
             </div>
 
             <div className="conteo-cards">
-              {visibleProducts.map((product) => {
-                const medidaSeleccionada = medidasConteo[product.id] || "base";
-                const unidadesPorInterna = getUnidadesPorInterna(product);
-                const cantidadContada = conteos[product.id] ?? String(getStockBase(product));
-                const equivalenteBase =
-                  medidaSeleccionada === "interna"
-                    ? Number(cantidadContada || 0) * unidadesPorInterna
-                    : Number(cantidadContada || 0);
+                  {visibleProducts.map((product) => {
+                const {
+                  medidaSeleccionada,
+                  unidadesPorInterna,
+                  cantidadRaw,
+                  adicionalesRaw,
+                  totalBase,
+                } = getConteoCalculado(product);
+                const equivalenteBase = Number(totalBase || 0);
                 const recomendado = calcularRecomendacion(product, equivalenteBase);
                 const estado = getStockEstado(product, equivalenteBase);
                 const recomendadoInterna =
@@ -299,9 +339,7 @@ function Conteo() {
                         <select
                           className="input-modern"
                           value={medidaSeleccionada}
-                          onChange={(e) =>
-                            setMedidasConteo((prev) => ({ ...prev, [product.id]: e.target.value }))
-                          }
+                          onChange={(e) => handleMedidaChange(product.id, e.target.value)}
                         >
                           <option value="base">{product.medidaBase || "UN"}</option>
                           {product.medidaInterna && (
@@ -316,15 +354,36 @@ function Conteo() {
                           className="input-modern"
                           type="number"
                           step="any"
-                          value={cantidadContada}
+                          value={cantidadRaw}
                           onChange={(e) =>
                             setConteos((prev) => ({ ...prev, [product.id]: e.target.value }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label>UN adicionales</label>
+                        <input
+                          className="input-modern"
+                          type="number"
+                          step="any"
+                          value={adicionalesRaw}
+                          onChange={(e) =>
+                            setAdicionalesConteo((prev) => ({
+                              ...prev,
+                              [product.id]: e.target.value,
+                            }))
                           }
                         />
                       </div>
                     </div>
 
                     <div className="conteo-info">
+                      <p>
+                        Total contado: {equivalenteBase.toFixed(2)} {product.medidaBase || "UN"}
+                        {medidaSeleccionada === "interna" && unidadesPorInterna > 0
+                          ? ` (${(equivalenteBase / unidadesPorInterna).toFixed(2)} ${product.medidaInterna || "INT"})`
+                          : ""}
+                      </p>
                       <p>Equivalente: {equivalenteBase.toFixed(2)} {product.medidaBase || "UN"}</p>
                       <p className={`estado-${estado.color}`}>{estado.label}</p>
                       <p>

@@ -25,11 +25,14 @@ function RecibirPedidoPage() {
   const [supplierProducts, setSupplierProducts] = useState([]);
   const [search, setSearch] = useState("");
   const [receivedItems, setReceivedItems] = useState([]);
+  const [editingItemIndex, setEditingItemIndex] = useState(null);
 
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [modoIngresoInventario, setModoIngresoInventario] = useState("sumar");
   const [medidaEntrada, setMedidaEntrada] = useState("base");
   const [cantidad, setCantidad] = useState("");
   const [cantidadBaseAdicional, setCantidadBaseAdicional] = useState("");
+  const [tipoImpuesto, setTipoImpuesto] = useState("NO_IMPUESTO");
   const [costoTotal, setCostoTotal] = useState("");
   const [margen, setMargen] = useState("20");
   const [precioVentaUnidadManual, setPrecioVentaUnidadManual] = useState("");
@@ -64,12 +67,24 @@ function RecibirPedidoPage() {
     return cantidadNum + adicionalBase;
   }, [selectedProduct, cantidad, medidaEntrada, cantidadBaseAdicional]);
 
+  const ivaMonto = useMemo(() => {
+    const subtotal = Number(costoTotal || 0);
+    if (subtotal <= 0) return 0;
+    return tipoImpuesto === "IVA" ? Number((subtotal * 0.15).toFixed(2)) : 0;
+  }, [costoTotal, tipoImpuesto]);
+
+  const costoConImpuesto = useMemo(() => {
+    const subtotal = Number(costoTotal || 0);
+    if (subtotal <= 0) return 0;
+    return Number((subtotal + ivaMonto).toFixed(2));
+  }, [costoTotal, ivaMonto]);
+
   const costoUnitario = useMemo(() => {
     const c = Number(cantidadBaseActual || 0);
-    const t = Number(costoTotal);
+    const t = Number(costoConImpuesto);
     if (c <= 0 || t <= 0) return 0;
     return Number((t / c).toFixed(2));
-  }, [cantidadBaseActual, costoTotal]);
+  }, [cantidadBaseActual, costoConImpuesto]);
 
   const precioVentaUnidadCalculado = useMemo(() => {
     if (costoUnitario <= 0) return 0;
@@ -92,6 +107,13 @@ function RecibirPedidoPage() {
     );
   }, [search, supplierProducts]);
   const previewCantidadBase = cantidadBaseActual;
+  const stockActualSeleccionado = Number(
+    selectedProduct ? getStockBaseValue(selectedProduct) : 0
+  );
+  const previewStockFinal =
+    modoIngresoInventario === "desde_cero"
+      ? Number(previewCantidadBase || 0)
+      : Number(stockActualSeleccionado || 0) + Number(previewCantidadBase || 0);
   const previewGananciaTotal = useMemo(
     () => Number(gananciaUnidad || 0) * Number(previewCantidadBase || 0),
     [gananciaUnidad, previewCantidadBase]
@@ -180,9 +202,12 @@ function RecibirPedidoPage() {
   const openProductModal = (product) => {
     const basePrice = Number(product.precioVentaBase ?? product.precioVenta ?? 0);
     setSelectedProduct(product);
+    setEditingItemIndex(null);
+    setModoIngresoInventario("sumar");
     setMedidaEntrada("base");
     setCantidad("");
     setCantidadBaseAdicional("");
+    setTipoImpuesto("NO_IMPUESTO");
     setCostoTotal("");
     setMargen("20");
     setPrecioOriginal(basePrice);
@@ -191,7 +216,70 @@ function RecibirPedidoPage() {
     setPendingItemData(null);
   };
 
-  const buildReceivedItem = ({ product, cantidadIngresada, cantidadBase, finalPrice, supplierId }) => {
+  const upsertReceivedItem = (item) => {
+    if (editingItemIndex === null) {
+      setReceivedItems((prev) => [...prev, item]);
+      return;
+    }
+
+    setReceivedItems((prev) =>
+      prev.map((currentItem, index) => (index === editingItemIndex ? item : currentItem))
+    );
+  };
+
+  const handleEditItem = (item, index) => {
+    const productFromList = supplierProducts.find((product) => product.id === item.productDocId);
+    const productToEdit = productFromList || {
+      id: item.productDocId,
+      nombre: item.nombre,
+      medidaBase: item.medidaBase,
+      medidaInterna: item.medidaInterna,
+      unidadesPorInterna: item.unidadesPorInterna,
+      precioVentaBase: item.precioVentaUnidad,
+      precioVenta: item.precioVentaUnidad,
+      stockBase: 0,
+      stockActual: 0,
+    };
+
+    setSelectedProduct(productToEdit);
+    setEditingItemIndex(index);
+    setModoIngresoInventario(item.modoIngresoInventario || "sumar");
+    setMedidaEntrada(item.medidaEntrada || "base");
+    setCantidad(String(Number(item.cantidadIngresada || 0)));
+    setCantidadBaseAdicional(String(Number(item.cantidadBaseAdicional || 0)));
+    setTipoImpuesto(item.impuestoTipo || "NO_IMPUESTO");
+    setCostoTotal(String(Number(item.totalFactura || 0)));
+    setMargen(String(Number(item.margen || 0)));
+    setPrecioOriginal(Number(item.precioVentaUnidad || 0));
+    setPrecioVentaUnidadManual(Number(item.precioVentaUnidad || 0).toFixed(2));
+    setShowPriceConfirmModal(false);
+    setPendingItemData(null);
+    setSearch("");
+  };
+
+  const handleRemoveItem = (index) => {
+    const item = receivedItems[index];
+    if (!item) return;
+    const confirmed = window.confirm(`Eliminar ${item.nombre} del pedido actual?`);
+    if (!confirmed) return;
+
+    setReceivedItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+    if (editingItemIndex === index) {
+      setEditingItemIndex(null);
+      setSelectedProduct(null);
+      setPendingItemData(null);
+      setShowPriceConfirmModal(false);
+    }
+  };
+
+  const buildReceivedItem = ({
+    product,
+    cantidadIngresada,
+    cantidadBase,
+    finalPrice,
+    supplierId,
+    modoIngreso,
+  }) => {
     const costoUnitarioNum = Number(costoUnitario || 0);
     const precioFinalNum = Number(finalPrice || 0);
     const gananciaUnidadFinal = Number((precioFinalNum - costoUnitarioNum).toFixed(2));
@@ -202,6 +290,13 @@ function RecibirPedidoPage() {
     const unidadesPorInterna = Number(
       product.unidadesPorInterna ?? product.unidadesPorPack ?? 0
     );
+    const medidaBaseLabel = product.medidaBase || "UN";
+    const medidaInternaLabel = product.medidaInterna || "PACK";
+    const cantidadAdicionalNum = Number(cantidadBaseAdicional || 0);
+    const detalleIngreso =
+      medidaEntrada === "interna"
+        ? `${Number(cantidadIngresada || 0)} ${medidaInternaLabel} + ${cantidadAdicionalNum} ${medidaBaseLabel}`
+        : `${Number(cantidadBase || 0)} ${medidaBaseLabel}`;
 
     return {
       productDocId: product.id,
@@ -210,8 +305,11 @@ function RecibirPedidoPage() {
       medidaInterna: product.medidaInterna || null,
       medidaEntrada,
       cantidadIngresada,
-      cantidadBaseAdicional: Number(cantidadBaseAdicional || 0),
+      cantidadBaseAdicional: cantidadAdicionalNum,
       cantidadBase,
+      unidades: cantidadBase,
+      detalleIngreso,
+      modoIngresoInventario: modoIngreso,
       unidadesUltimaCompra: cantidadBase,
       unidadesPorInterna: unidadesPorInterna > 0 ? unidadesPorInterna : null,
       costoUnitario: costoUnitarioNum,
@@ -219,6 +317,9 @@ function RecibirPedidoPage() {
       precioVentaUnidad: precioFinalNum,
       gananciaUnidad: gananciaUnidadFinal,
       totalFactura: Number(costoTotal || 0),
+      impuestoTipo: tipoImpuesto,
+      ivaMonto,
+      costoConImpuesto,
       proveedorId: supplierId,
       actualizarPrecio: Math.abs(precioFinalNum - Number(precioOriginal || 0)) > 0.009,
     };
@@ -233,14 +334,16 @@ function RecibirPedidoPage() {
       cantidadBase: pendingItemData.cantidadBase,
       finalPrice,
       supplierId: selectedSupplier,
+      modoIngreso: pendingItemData.modoIngresoInventario,
     });
 
     if (!updatePrice) {
       item.actualizarPrecio = false;
     }
 
-    setReceivedItems((prev) => [...prev, item]);
+    upsertReceivedItem(item);
     setSelectedProduct(null);
+    setEditingItemIndex(null);
     setSearch("");
     setShowPriceConfirmModal(false);
     setPendingItemData(null);
@@ -276,6 +379,7 @@ function RecibirPedidoPage() {
       product: selectedProduct,
       cantidadIngresada: cantidadNum,
       cantidadBase,
+      modoIngresoInventario,
       proposedPrice,
       costoTotalNum,
     });
@@ -291,10 +395,12 @@ function RecibirPedidoPage() {
       cantidadBase,
       finalPrice: proposedPrice,
       supplierId: selectedSupplier,
+      modoIngreso: modoIngresoInventario,
     });
     item.actualizarPrecio = false;
-    setReceivedItems((prev) => [...prev, item]);
+    upsertReceivedItem(item);
     setSelectedProduct(null);
+    setEditingItemIndex(null);
     setSearch("");
     setPendingItemData(null);
   };
@@ -318,20 +424,28 @@ function RecibirPedidoPage() {
         acc[product.id] = getStockBaseValue(product);
         return acc;
       }, {});
+      const movementItems = [];
 
       for (const item of receivedItems) {
         const stockAnterior = Number(currentStockByProduct[item.productDocId] || 0);
         const cantidadBase = Number(item.cantidadBase || 0);
-        const stockNuevo = stockAnterior + cantidadBase;
+        const modoIngreso = item.modoIngresoInventario || "sumar";
+        const stockNuevo =
+          modoIngreso === "desde_cero" ? cantidadBase : stockAnterior + cantidadBase;
 
         const updatePayload = {
-          stockBase: increment(cantidadBase),
-          stockActual: increment(cantidadBase),
           unidadesUltimaCompra: Number(item.unidadesUltimaCompra),
           costoUnitarioBase: Number(item.costoUnitario),
           costoUnitario: Number(item.costoUnitario),
           ultimaActualizacion: serverTimestamp(),
         };
+        if (modoIngreso === "desde_cero") {
+          updatePayload.stockBase = Number(cantidadBase);
+          updatePayload.stockActual = Number(cantidadBase);
+        } else {
+          updatePayload.stockBase = increment(cantidadBase);
+          updatePayload.stockActual = increment(cantidadBase);
+        }
 
         if (item.actualizarPrecio) {
           updatePayload.margen = Number(item.margen);
@@ -370,12 +484,22 @@ function RecibirPedidoPage() {
         });
 
         currentStockByProduct[item.productDocId] = stockNuevo;
+        movementItems.push({
+          ...item,
+          tipo: "entrada",
+          detalle: item.detalleIngreso,
+          unidades: cantidadBase,
+          modo: modoIngreso,
+          stockAnterior,
+          stockNuevo,
+          costoUnitario: Number(item.costoUnitario || 0),
+        });
       }
 
       await addDoc(userCollection("movimientos"), {
         type: "entrada",
         supplierId: selectedSupplier,
-        items: receivedItems,
+        items: movementItems,
         createdAt: serverTimestamp(),
       });
 
@@ -435,16 +559,49 @@ function RecibirPedidoPage() {
       {selectedProduct && (
         <div className="section-card">
           <h3 className="section-title">{selectedProduct.nombre}</h3>
-          <select
-            className="input-modern"
-            value={medidaEntrada}
-            onChange={(e) => setMedidaEntrada(e.target.value)}
-          >
-            <option value="base">{selectedProduct.medidaBase || "UN"}</option>
-            {selectedProduct.medidaInterna && (
-              <option value="interna">{selectedProduct.medidaInterna}</option>
+          <div className="input-group">
+            <label>Tipo de ingreso de inventario</label>
+            <div className="row">
+              <label>
+                <input
+                  type="radio"
+                  name="modo-ingreso-inventario"
+                  value="desde_cero"
+                  checked={modoIngresoInventario === "desde_cero"}
+                  onChange={(e) => setModoIngresoInventario(e.target.value)}
+                />{" "}
+                Inventario desde 0
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="modo-ingreso-inventario"
+                  value="sumar"
+                  checked={modoIngresoInventario === "sumar"}
+                  onChange={(e) => setModoIngresoInventario(e.target.value)}
+                />{" "}
+                Sumar al inventario actual
+              </label>
+            </div>
+            {modoIngresoInventario === "desde_cero" && (
+              <small>Esto reemplazara el stock actual.</small>
             )}
-          </select>
+          </div>
+
+          <div className="input-group">
+            <label htmlFor="unidad-ingreso">Unidad de ingreso</label>
+            <select
+              id="unidad-ingreso"
+              className="input-modern"
+              value={medidaEntrada}
+              onChange={(e) => setMedidaEntrada(e.target.value)}
+            >
+              <option value="base">{selectedProduct.medidaBase || "UN"}</option>
+              {selectedProduct.medidaInterna && (
+                <option value="interna">{selectedProduct.medidaInterna}</option>
+              )}
+            </select>
+          </div>
           <p className="badge-info">
             Unidad seleccionada:{" "}
             <strong>
@@ -475,7 +632,11 @@ function RecibirPedidoPage() {
           )}
           <div className="receive-form-grid">
             <div className="input-group">
-              <label htmlFor="cantidad-recibida">Cantidad recibida</label>
+              <label htmlFor="cantidad-recibida">
+                {medidaEntrada === "interna"
+                  ? `Cantidad en ${selectedProduct.medidaInterna || "PACK"}`
+                  : `Cantidad en ${selectedProduct.medidaBase || "UN"}`}
+              </label>
               <input
                 id="cantidad-recibida"
                 className="input-modern"
@@ -483,7 +644,7 @@ function RecibirPedidoPage() {
                 value={cantidad}
                 onChange={(e) => setCantidad(e.target.value)}
               />
-              <small>Ingresa la cantidad en la medida seleccionada.</small>
+              <small>Ingresa la cantidad en la unidad de ingreso.</small>
             </div>
 
             <div className="input-group">
@@ -499,6 +660,30 @@ function RecibirPedidoPage() {
               />
               <small>Opcional. Se suma al equivalente base.</small>
             </div>
+            <div className="input-group">
+              <label htmlFor="cantidad-recibida-automatica">Cantidad recibida (automatica)</label>
+              <input
+                id="cantidad-recibida-automatica"
+                className="input-modern"
+                type="number"
+                value={Number(previewCantidadBase || 0)}
+                readOnly
+              />
+              <small>Calculada automaticamente en unidades base.</small>
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="tipo-impuesto">Impuesto</label>
+              <select
+                id="tipo-impuesto"
+                className="input-modern"
+                value={tipoImpuesto}
+                onChange={(e) => setTipoImpuesto(e.target.value)}
+              >
+                <option value="NO_IMPUESTO">NO IMPUESTO</option>
+                <option value="IVA">IVA</option>
+              </select>
+            </div>
 
             <div className="input-group">
               <label htmlFor="costo-total">Costo total de la compra</label>
@@ -509,7 +694,22 @@ function RecibirPedidoPage() {
                 value={costoTotal}
                 onChange={(e) => setCostoTotal(e.target.value)}
               />
-              <small>El sistema calcula el costo por unidad base automaticamente.</small>
+              <small>Costo pagado al proveedor (sin impuesto).</small>
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="costo-con-impuesto">Costo + impuesto</label>
+              <input
+                id="costo-con-impuesto"
+                className="input-modern"
+                type="number"
+                value={costoConImpuesto}
+                readOnly
+              />
+              <small>
+                Calculado automaticamente segun el tipo de impuesto. IVA aplicado: C$
+                {ivaMonto.toFixed(2)}
+              </small>
             </div>
 
             <div className="input-group">
@@ -567,13 +767,18 @@ function RecibirPedidoPage() {
           </div>
           <div className="spacer" />
           <button type="button" className="btn-primary" onClick={handleAddItem}>
-            Confirmar
+            {editingItemIndex === null ? "Confirmar" : "Actualizar linea"}
           </button>
           <div className="preview-box">
+            <p>Stock actual: {stockActualSeleccionado.toFixed(2)} {selectedProduct.medidaBase || "UN"}</p>
             <p>
-              Equivalente base: {previewCantidadBase.toFixed(2)}{" "}
-              {selectedProduct.medidaBase || "UN"}
+              Ingreso:{" "}
+              {medidaEntrada === "interna"
+                ? `${Number(cantidad || 0)} ${selectedProduct.medidaInterna || "PACK"} + ${Number(cantidadBaseAdicional || 0)} ${selectedProduct.medidaBase || "UN"}`
+                : `${Number(cantidad || 0)} ${selectedProduct.medidaBase || "UN"}`}
             </p>
+            <p>Equivalente: {previewCantidadBase.toFixed(2)} {selectedProduct.medidaBase || "UN"}</p>
+            <p>Stock final: {previewStockFinal.toFixed(2)} {selectedProduct.medidaBase || "UN"}</p>
             <p>Inversion total: C${Number(costoTotal || 0).toFixed(2)}</p>
             <p>Ganancia estimada: C${previewGananciaTotal.toFixed(2)}</p>
           </div>
@@ -640,6 +845,7 @@ function RecibirPedidoPage() {
                 <th>Ganancia Unidad</th>
                 <th>Ganancia Total</th>
                 <th>Total Factura</th>
+                <th>Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -665,6 +871,25 @@ function RecibirPedidoPage() {
                     {(Number(item.gananciaUnidad || 0) * Number(item.cantidadBase || 0)).toFixed(2)}
                   </td>
                   <td>{item.totalFactura.toFixed(2)}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => handleEditItem(item, index)}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ backgroundColor: "#dc2626", color: "#fff", borderColor: "#dc2626" }}
+                        onClick={() => handleRemoveItem(index)}
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -711,6 +936,27 @@ function RecibirPedidoPage() {
                   <p>
                     <strong>Ganancia estimada:</strong> C${gananciaItem.toFixed(2)}
                   </p>
+                </div>
+                <div
+                  className="pedido-card-actions"
+                  style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}
+                >
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ backgroundColor: "#16a34a", color: "#fff", borderColor: "#16a34a" }}
+                    onClick={() => handleEditItem(item, index)}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ backgroundColor: "#dc2626", color: "#fff", borderColor: "#dc2626" }}
+                    onClick={() => handleRemoveItem(index)}
+                  >
+                    Eliminar
+                  </button>
                 </div>
               </div>
             );

@@ -74,8 +74,11 @@ function RealizarPedido() {
   );
 
   const calcularRecomendadoFinal = useCallback(
-    (producto) =>
-      Math.max(calcularRecomendadoStock(producto), getRecomendacionRotacion(producto)),
+    (producto) => {
+      const stockObjetivo = Number(calcularRecomendadoStock(producto) || 0);
+      const rotacionExtra = Number(getRecomendacionRotacion(producto) || 0);
+      return stockObjetivo + rotacionExtra;
+    },
     [calcularRecomendadoStock, getRecomendacionRotacion]
   );
 
@@ -304,9 +307,9 @@ function RealizarPedido() {
               <tr>
                 <th>Producto</th>
                 <th>Stock actual</th>
-                <th>Recomendado (Stock)</th>
-                <th>Recomendado (Rotacion)</th>
-                <th>Recomendado Final</th>
+                <th>Stock objetivo</th>
+                <th>Extra rotacion</th>
+                <th>Pedido recomendado</th>
                 <th>Unidades a pedir</th>
               </tr>
             </thead>
@@ -314,7 +317,7 @@ function RealizarPedido() {
               {productos.map((p) => {
                 const recomendadoStock = calcularRecomendadoStock(p);
                 const recomendadoRotacion = getRecomendacionRotacion(p);
-                const recomendadoFinal = Math.max(recomendadoStock, recomendadoRotacion);
+                const recomendadoFinal = recomendadoStock + recomendadoRotacion;
                 const rowState = pedido[p.id] || {};
                 const incluir = rowState.incluir !== false;
                 return (
@@ -359,7 +362,7 @@ function RealizarPedido() {
         {productos.map((p) => {
           const recomendadoStock = calcularRecomendadoStock(p);
           const recomendadoRotacion = getRecomendacionRotacion(p);
-          const recomendado = Math.max(recomendadoStock, recomendadoRotacion);
+          const recomendado = recomendadoStock + recomendadoRotacion;
           const unidadesPorInterna = Number(p.unidadesPorInterna ?? p.unidadesPorPack ?? 0);
           const stateItem = pedido[p.id] || {};
           const sugeridoBase = Number(stateItem.sugeridoBase ?? recomendado ?? 0);
@@ -367,6 +370,8 @@ function RealizarPedido() {
           const incluir = stateItem.incluir !== false;
           const sugeridoPack = unidadesPorInterna > 0 ? sugeridoBase / unidadesPorInterna : null;
           const pedidoPack = unidadesPorInterna > 0 ? pedidoBase / unidadesPorInterna : null;
+          const pedidoComercialPack =
+            unidadesPorInterna > 0 ? Math.ceil(sugeridoBase / unidadesPorInterna) : null;
           const productoId = p.productoId || p.id;
           const mejor = mejorProveedorPorProducto[productoId];
           const proveedorNoEsElMejor =
@@ -389,15 +394,15 @@ function RealizarPedido() {
                   </strong>
                 </p>
                 <p className="recomendado">
-                  Recomendado stock:{" "}
+                  Stock objetivo:{" "}
                   <strong>
                     {recomendadoStock.toFixed(2)} {p.medidaBase || "UN"}
                   </strong>
                 </p>
                 <p className="recomendado">
-                  Recomendado rotacion:{" "}
+                  Extra por rotacion:{" "}
                   <strong>
-                    {recomendadoRotacion.toFixed(2)} {p.medidaBase || "UN"}
+                    +{recomendadoRotacion.toFixed(2)} {p.medidaBase || "UN"}
                   </strong>
                 </p>
                 <p className="recomendado">
@@ -408,6 +413,14 @@ function RealizarPedido() {
                       ` (${sugeridoPack.toFixed(2)} ${p.medidaInterna || "PACK"})`}
                   </strong>
                 </p>
+                {pedidoComercialPack !== null && (
+                  <p>
+                    Pedido comercial:{" "}
+                    <strong>
+                      {pedidoComercialPack} {p.medidaInterna || "PACK"}
+                    </strong>
+                  </p>
+                )}
                 <p>
                   Pedido usuario:{" "}
                   <strong>
