@@ -16,12 +16,31 @@ import SeccionDistribuidores from "../components/SeccionDistribuidores";
 import SkeletonCard from "../components/SkeletonCard";
 import { upsertProviderProductLink } from "../services/providerProductService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
+import { getInventoryMovementAnalytics } from "../services/analyticsService";
 import {
   FaBalanceScale,
   FaBoxOpen,
+  FaFilter,
   FaQuestionCircle,
   FaWarehouse,
 } from "react-icons/fa";
+
+const FILTER_STORAGE_KEY = "inventory_filters_v1";
+
+const readStoredFilters = () => {
+  try {
+    const raw = localStorage.getItem(FILTER_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return {
+      sortBy: parsed.sortBy || "name",
+      providerFilter: parsed.providerFilter || "all",
+      rotationFilter: parsed.rotationFilter || "all",
+    };
+  } catch {
+    return null;
+  }
+};
 
 function Products() {
   const navigate = useNavigate();
@@ -52,6 +71,17 @@ function Products() {
   const [providersTemp, setProvidersTemp] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingId, setIsDeletingId] = useState("");
+  const [proveedores, setProveedores] = useState([]);
+  const [providerIdsByProduct, setProviderIdsByProduct] = useState({});
+  const [diasStockByProduct, setDiasStockByProduct] = useState({});
+  const [showFilters, setShowFilters] = useState(false);
+  const storedFilters = readStoredFilters();
+  const [sortBy, setSortBy] = useState(storedFilters?.sortBy || "name");
+  const [providerFilter, setProviderFilter] = useState(storedFilters?.providerFilter || "all");
+  const [rotationFilter, setRotationFilter] = useState(storedFilters?.rotationFilter || "all");
+  const [draftSortBy, setDraftSortBy] = useState("name");
+  const [draftProviderFilter, setDraftProviderFilter] = useState("all");
+  const [draftRotationFilter, setDraftRotationFilter] = useState("all");
 
   const precioVentaCalculado = useMemo(() => {
     const costo = Number(costoUnitario);
@@ -64,13 +94,44 @@ function Products() {
     precioVentaManual === "" ? precioVentaCalculado : Number(precioVentaManual);
 
   const fetchProducts = async () => {
-    const snapshot = await getDocs(userCollection("products"));
-    setProducts(
-      snapshot.docs.map((docItem) => ({
+    const [snapshot, proveedoresSnap, linksSnapA, linksSnapB, analytics] = await Promise.all([
+      getDocs(userCollection("products")),
+      getDocs(userCollection("proveedores")),
+      getDocs(userCollection("proveedor_producto")),
+      getDocs(userCollection("proveedorProducto")),
+      getInventoryMovementAnalytics(30),
+    ]);
+    const productsData = snapshot.docs.map((docItem) => ({
+      id: docItem.id,
+      ...docItem.data(),
+    }));
+    setProducts(productsData);
+    setProveedores(
+      proveedoresSnap.docs.map((docItem) => ({
         id: docItem.id,
         ...docItem.data(),
       }))
     );
+
+    const allLinks = [...linksSnapA.docs, ...linksSnapB.docs].map((docItem) => docItem.data());
+    const nextProviderIdsByProduct = {};
+    allLinks.forEach((link) => {
+      if (link.activo === false) return;
+      const productKey = String(link.productDocId || link.productoId || "");
+      const providerKey = String(link.proveedorId || "");
+      if (!productKey || !providerKey) return;
+      if (!nextProviderIdsByProduct[productKey]) nextProviderIdsByProduct[productKey] = [];
+      if (!nextProviderIdsByProduct[productKey].includes(providerKey)) {
+        nextProviderIdsByProduct[productKey].push(providerKey);
+      }
+    });
+    setProviderIdsByProduct(nextProviderIdsByProduct);
+
+    const rotationMap = {};
+    (analytics.productosAnalizados || []).forEach((item) => {
+      rotationMap[String(item.id || item.productoId || "")] = Number(item.diasStockRestantes);
+    });
+    setDiasStockByProduct(rotationMap);
   };
 
   useEffect(() => {
@@ -106,15 +167,81 @@ function Products() {
     fetchSuggestions();
   }, [searchTerm]);
 
+  useEffect(() => {
+    localStorage.setItem(
+      FILTER_STORAGE_KEY,
+      JSON.stringify({ sortBy, providerFilter, rotationFilter })
+    );
+  }, [sortBy, providerFilter, rotationFilter]);
+
   const visibleSuggestions = useMemo(
     () => (searchTerm.trim().length < 2 ? [] : suggestions),
     [searchTerm, suggestions]
   );
   const visibleProducts = useMemo(() => {
-    if (!listSearch.trim()) return products;
     const term = listSearch.trim().toLowerCase();
-    return products.filter((p) => (p.nombre || "").toLowerCase().includes(term));
-  }, [products, listSearch]);
+    const searched = term
+      ? products.filter((p) => (p.nombre || "").toLowerCase().includes(term))
+      : products;
+
+    const filteredByProvider = searched.filter((product) => {
+      if (providerFilter === "all") return true;
+      const productProviderIds = providerIdsByProduct[String(product.id)] || [];
+      return productProviderIds.includes(providerFilter);
+    });
+
+    const filteredByRotation = filteredByProvider.filter((product) => {
+      if (rotationFilter === "all") return true;
+      const diasStock = Number(diasStockByProduct[String(product.id)]);
+      if (!Number.isFinite(diasStock)) return rotationFilter === "dead";
+      if (rotationFilter === "fast") return diasStock < 7;
+      if (rotationFilter === "medium") return diasStock >= 7 && diasStock <= 20;
+      if (rotationFilter === "slow") return diasStock > 20 && diasStock <= 40;
+      if (rotationFilter === "dead") return diasStock > 40;
+      return true;
+    });
+
+    return [...filteredByRotation].sort((a, b) => {
+      if (sortBy === "price") {
+        return Number(a.precioVentaBase ?? a.precioVenta ?? 0) - Number(b.precioVentaBase ?? b.precioVenta ?? 0);
+      }
+      if (sortBy === "stock") {
+        return Number(a.stockBase ?? a.stockActual ?? 0) - Number(b.stockBase ?? b.stockActual ?? 0);
+      }
+      if (sortBy === "rotation") {
+        return Number(diasStockByProduct[String(a.id)] || 999999) - Number(diasStockByProduct[String(b.id)] || 999999);
+      }
+      return String(a.nombre || "").localeCompare(String(b.nombre || ""));
+    });
+  }, [
+    products,
+    listSearch,
+    providerFilter,
+    providerIdsByProduct,
+    rotationFilter,
+    diasStockByProduct,
+    sortBy,
+  ]);
+
+  const openFiltersModal = () => {
+    setDraftSortBy(sortBy);
+    setDraftProviderFilter(providerFilter);
+    setDraftRotationFilter(rotationFilter);
+    setShowFilters(true);
+  };
+
+  const applyFilters = () => {
+    setSortBy(draftSortBy);
+    setProviderFilter(draftProviderFilter);
+    setRotationFilter(draftRotationFilter);
+    setShowFilters(false);
+  };
+
+  const clearDraftFilters = () => {
+    setDraftSortBy("name");
+    setDraftProviderFilter("all");
+    setDraftRotationFilter("all");
+  };
 
   const generateProductId = (name, existingProducts) => {
     const clean = (name || "").trim();
@@ -344,6 +471,9 @@ function Products() {
           value={listSearch}
           onChange={(e) => setListSearch(e.target.value)}
         />
+        <button type="button" className="btn-secondary" onClick={openFiltersModal}>
+          <FaFilter /> Filter
+        </button>
       </div>
 
       {loading ? (
@@ -667,6 +797,68 @@ function Products() {
                 )}
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showFilters && (
+        <div className="modal-overlay" onClick={() => setShowFilters(false)}>
+          <div className="modal modal-compact" onClick={(e) => e.stopPropagation()}>
+            <h3>Filtros de inventario</h3>
+
+            <div className="input-group">
+              <label>Ordenar por</label>
+              <select
+                className="input-modern"
+                value={draftSortBy}
+                onChange={(e) => setDraftSortBy(e.target.value)}
+              >
+                <option value="name">Nombre (A - Z)</option>
+                <option value="price">Precio</option>
+                <option value="stock">Stock</option>
+                <option value="rotation">Rotacion</option>
+              </select>
+            </div>
+
+            <div className="input-group">
+              <label>Proveedor</label>
+              <select
+                className="input-modern"
+                value={draftProviderFilter}
+                onChange={(e) => setDraftProviderFilter(e.target.value)}
+              >
+                <option value="all">Todos</option>
+                {proveedores.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.nombre || provider.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="input-group">
+              <label>Rotacion</label>
+              <select
+                className="input-modern"
+                value={draftRotationFilter}
+                onChange={(e) => setDraftRotationFilter(e.target.value)}
+              >
+                <option value="all">Todos</option>
+                <option value="fast">Rapidos (&lt; 7 dias)</option>
+                <option value="medium">Medios (7-20 dias)</option>
+                <option value="slow">Lentos (20-40 dias)</option>
+                <option value="dead">Inventario muerto (&gt; 40 dias)</option>
+              </select>
+            </div>
+
+            <div className="modal-buttons">
+              <button type="button" className="btn-secondary" onClick={clearDraftFilters}>
+                Limpiar filtros
+              </button>
+              <button type="button" className="btn-primary" onClick={applyFilters}>
+                Aplicar
+              </button>
+            </div>
           </div>
         </div>
       )}
