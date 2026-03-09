@@ -13,16 +13,68 @@ const formatDate = (value) => {
   return "-";
 };
 
+const getCantidadBase = (prod) =>
+  Number(prod.cantidadBase ?? prod.cantidadSolicitada ?? prod.unidades ?? 0);
+
+const getUnidadesPorInterna = (prod) =>
+  Number(prod.unidadesPorInterna ?? prod.unidadesPorPack ?? 0);
+
+const formatCantidadPedido = (prod) => {
+  const cantidadBase = getCantidadBase(prod);
+  const medidaBase = prod.medidaBase || prod.unidad || "UN";
+  const medidaInterna = prod.medidaInterna || null;
+  const factorInterna = getUnidadesPorInterna(prod);
+
+  if (!medidaInterna || factorInterna <= 0) {
+    return `${cantidadBase.toFixed(2)} ${medidaBase}`;
+  }
+
+  const cantidadInterna = cantidadBase / factorInterna;
+  const internaEntera = Math.floor(cantidadInterna);
+  const restoBase = Number((cantidadBase - internaEntera * factorInterna).toFixed(2));
+
+  if (Math.abs(restoBase) < 0.001) {
+    return `${internaEntera} ${medidaInterna} (${cantidadBase.toFixed(2)} ${medidaBase})`;
+  }
+
+  if (internaEntera > 0) {
+    return `${internaEntera} ${medidaInterna} + ${restoBase.toFixed(2)} ${medidaBase} (${cantidadBase.toFixed(2)} ${medidaBase})`;
+  }
+
+  return `${cantidadInterna.toFixed(2)} ${medidaInterna} (${cantidadBase.toFixed(2)} ${medidaBase})`;
+};
+
+const getPedidoResumen = (pedido) => {
+  const productos = Array.isArray(pedido.productos) ? pedido.productos : [];
+  const totalProductos = productos.length;
+  const totalUnidades = productos.reduce((acc, prod) => acc + getCantidadBase(prod), 0);
+  const totalInternas = productos.reduce((acc, prod) => {
+    const factor = getUnidadesPorInterna(prod);
+    if (factor <= 0) return acc;
+    return acc + getCantidadBase(prod) / factor;
+  }, 0);
+
+  return {
+    totalProductos,
+    totalUnidades,
+    totalInternas,
+  };
+};
+
 function HistorialPedidos() {
   const [pedidos, setPedidos] = useState([]);
+  const [providerPhoneById, setProviderPhoneById] = useState({});
   const [search, setSearch] = useState("");
   const [estadoFiltro, setEstadoFiltro] = useState("todos");
   const [expandedPedidoId, setExpandedPedidoId] = useState("");
 
   useEffect(() => {
     const fetchPedidos = async () => {
-      const snapshot = await getDocs(userCollection("pedidos"));
-      const data = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+      const [pedidosSnapshot, proveedoresSnapshot] = await Promise.all([
+        getDocs(userCollection("pedidos")),
+        getDocs(userCollection("proveedores")),
+      ]);
+      const data = pedidosSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
 
       data.sort((a, b) => {
         const aMillis = a.fechaCreacion?.toMillis?.() || 0;
@@ -31,6 +83,16 @@ function HistorialPedidos() {
       });
 
       setPedidos(data);
+      setProviderPhoneById(
+        proveedoresSnapshot.docs.reduce((acc, docItem) => {
+          const proveedor = docItem.data();
+          const rawPhone = String(proveedor.telefono || proveedor.phone || "").replace(/\D/g, "");
+          if (rawPhone) {
+            acc[docItem.id] = rawPhone;
+          }
+          return acc;
+        }, {})
+      );
     };
 
     fetchPedidos();
@@ -67,6 +129,36 @@ function HistorialPedidos() {
           : pedido
       )
     );
+  };
+
+  const getPedidoWhatsappText = (pedido) => {
+    const resumen = getPedidoResumen(pedido);
+    const lineasProductos = (pedido.productos || [])
+      .map((prod) => `• ${prod.nombre}\n  ${formatCantidadPedido(prod)}`)
+      .join("\n\n");
+
+    return [
+      "Pedido - Pulperia Hurtado",
+      "",
+      `Proveedor: ${pedido.proveedorNombre || pedido.proveedorId || "Proveedor"}`,
+      "",
+      lineasProductos,
+      "",
+      `Total productos: ${resumen.totalProductos}`,
+      `Total unidades: ${resumen.totalUnidades.toFixed(2)} UN`,
+      "",
+      "Gracias.",
+    ].join("\n");
+  };
+
+  const handleSendWhatsapp = (pedido) => {
+    const phoneFromPedido = String(pedido.proveedorTelefono || "").replace(/\D/g, "");
+    const providerPhone = providerPhoneById[String(pedido.proveedorId || "")] || "";
+    const phone = phoneFromPedido || providerPhone;
+    const mensaje = getPedidoWhatsappText(pedido);
+    const baseUrl = phone ? `https://wa.me/${phone}` : "https://wa.me/";
+    const url = `${baseUrl}?text=${encodeURIComponent(mensaje)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
   };
 
   return (
@@ -126,6 +218,13 @@ function HistorialPedidos() {
               <button
                 type="button"
                 className="btn-secondary"
+                onClick={() => handleSendWhatsapp(pedido)}
+              >
+                Enviar por WhatsApp
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
                 onClick={() =>
                   setExpandedPedidoId((prev) => (prev === pedido.id ? "" : pedido.id))
                 }
@@ -136,6 +235,16 @@ function HistorialPedidos() {
 
             {expandedPedidoId === pedido.id && (
               <div className="pedido-detail-list">
+                {(() => {
+                  const resumen = getPedidoResumen(pedido);
+                  return (
+                    <div className="pedido-detail-item">
+                      <p>📦 Total productos: {resumen.totalProductos}</p>
+                      <p>📊 Total unidades: {resumen.totalUnidades.toFixed(2)} UN</p>
+                      <p>📦 Total internas (equivalente): {resumen.totalInternas.toFixed(2)}</p>
+                    </div>
+                  );
+                })()}
                 {(pedido.productos || []).map((prod, index) => (
                   <div
                     key={`${pedido.id}-${prod.productoId || index}`}
@@ -143,8 +252,7 @@ function HistorialPedidos() {
                   >
                     <p>{prod.nombre}</p>
                     <p>
-                      Cantidad: {Number(prod.cantidadBase ?? prod.cantidadSolicitada ?? 0).toFixed(2)}{" "}
-                      {prod.medidaBase || prod.unidad || "UN"}
+                      Cantidad: {formatCantidadPedido(prod)}
                     </p>
                     <p>
                       Costo unitario: C$

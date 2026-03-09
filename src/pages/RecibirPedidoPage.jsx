@@ -23,6 +23,7 @@ function RecibirPedidoPage() {
   const [suppliers, setSuppliers] = useState([]);
   const [selectedSupplier, setSelectedSupplier] = useState("");
   const [supplierProducts, setSupplierProducts] = useState([]);
+  const [providerLinkByProductId, setProviderLinkByProductId] = useState({});
   const [search, setSearch] = useState("");
   const [receivedItems, setReceivedItems] = useState([]);
   const [editingItemIndex, setEditingItemIndex] = useState(null);
@@ -36,6 +37,7 @@ function RecibirPedidoPage() {
   const [costoTotal, setCostoTotal] = useState("");
   const [margen, setMargen] = useState("20");
   const [precioVentaUnidadManual, setPrecioVentaUnidadManual] = useState("");
+  const [precioEditadoManualmente, setPrecioEditadoManualmente] = useState(false);
   const [precioOriginal, setPrecioOriginal] = useState(0);
   const [showPriceConfirmModal, setShowPriceConfirmModal] = useState(false);
   const [pendingItemData, setPendingItemData] = useState(null);
@@ -87,14 +89,14 @@ function RecibirPedidoPage() {
   }, [cantidadBaseActual, costoConImpuesto]);
 
   const precioVentaUnidadCalculado = useMemo(() => {
-    if (costoUnitario <= 0) return 0;
+    if (costoUnitario <= 0) return Number(precioOriginal || 0);
     return Number((costoUnitario * (1 + Number(margen) / 100)).toFixed(2));
-  }, [costoUnitario, margen]);
+  }, [costoUnitario, margen, precioOriginal]);
 
   const precioVentaUnidad =
-    precioVentaUnidadManual === ""
-      ? precioVentaUnidadCalculado
-      : Number(precioVentaUnidadManual);
+    precioEditadoManualmente
+      ? Number(precioVentaUnidadManual || 0)
+      : precioVentaUnidadCalculado;
 
   const gananciaUnidad = useMemo(() => {
     return Number((Number(precioVentaUnidad) - Number(costoUnitario)).toFixed(2));
@@ -118,6 +120,35 @@ function RecibirPedidoPage() {
     () => Number(gananciaUnidad || 0) * Number(previewCantidadBase || 0),
     [gananciaUnidad, previewCantidadBase]
   );
+  const previousProviderCost = useMemo(() => {
+    if (!selectedProduct) return 0;
+    return Number(providerLinkByProductId[selectedProduct.id]?.costoUnitario || 0);
+  }, [selectedProduct, providerLinkByProductId]);
+  const priceIncreaseInfo = useMemo(() => {
+    const prev = Number(previousProviderCost || 0);
+    const next = Number(costoUnitario || 0);
+    if (prev <= 0 || next <= 0 || next <= prev) return null;
+    const changePercent = Number((((next - prev) / prev) * 100).toFixed(2));
+    return {
+      prev,
+      next,
+      changePercent,
+    };
+  }, [previousProviderCost, costoUnitario]);
+  const margenPorRotacionSugerido = useMemo(() => {
+    const tipo = String(
+      selectedProduct?.tipoRotacion || selectedProduct?.rotacion || ""
+    ).toLowerCase();
+    if (tipo === "alta" || tipo === "rapido" || tipo === "rápido") return 15;
+    if (tipo === "media" || tipo === "medio") return 20;
+    if (tipo === "baja" || tipo === "lento") return 30;
+    if (tipo === "muerto") return 35;
+    return 20;
+  }, [selectedProduct]);
+  const precioRecomendadoPorRotacion = useMemo(() => {
+    if (costoUnitario <= 0) return 0;
+    return Number((costoUnitario * (1 + margenPorRotacionSugerido / 100)).toFixed(2));
+  }, [costoUnitario, margenPorRotacionSugerido]);
 
   const totalInvertido = useMemo(
     () => receivedItems.reduce((acc, item) => acc + Number(item.totalFactura || 0), 0),
@@ -139,6 +170,7 @@ function RecibirPedidoPage() {
   const loadSupplierProducts = async (supplierId) => {
     if (!supplierId) {
       setSupplierProducts([]);
+      setProviderLinkByProductId({});
       return;
     }
 
@@ -146,6 +178,13 @@ function RecibirPedidoPage() {
       getProviderProductLinksByProvider(supplierId),
       getDocs(query(userCollection("products"), where("activo", "==", true))),
     ]);
+    const linksMap = links.reduce((acc, link) => {
+      const productId = String(link.productDocId || link.productoId || "");
+      if (!productId) return acc;
+      acc[productId] = link;
+      return acc;
+    }, {});
+    setProviderLinkByProductId(linksMap);
     const ids = new Set(links.map((link) => String(link.productDocId || link.productoId || "")));
     setSupplierProducts(
       snapshot.docs
@@ -162,19 +201,17 @@ function RecibirPedidoPage() {
   const handleMargenChange = (nuevoMargen) => {
     if (nuevoMargen === "") {
       setMargen("");
-      setPrecioVentaUnidadManual("");
+      setPrecioEditadoManualmente(false);
       return;
     }
 
-    const margenNum = Number(nuevoMargen || 0);
-    const nuevoPrecioUnidad = costoUnitario * (1 + margenNum / 100);
-
     setMargen(String(nuevoMargen));
-    setPrecioVentaUnidadManual(nuevoPrecioUnidad.toFixed(2));
+    setPrecioEditadoManualmente(false);
   };
 
   const handlePrecioVentaUnidadChange = (value) => {
     setPrecioVentaUnidadManual(value);
+    setPrecioEditadoManualmente(true);
 
     if (costoUnitario > 0 && value !== "") {
       const nuevoPrecioUnidad = Number(value);
@@ -212,6 +249,7 @@ function RecibirPedidoPage() {
     setMargen("20");
     setPrecioOriginal(basePrice);
     setPrecioVentaUnidadManual(basePrice > 0 ? basePrice.toFixed(2) : "");
+    setPrecioEditadoManualmente(false);
     setShowPriceConfirmModal(false);
     setPendingItemData(null);
   };
@@ -252,6 +290,7 @@ function RecibirPedidoPage() {
     setMargen(String(Number(item.margen || 0)));
     setPrecioOriginal(Number(item.precioVentaUnidad || 0));
     setPrecioVentaUnidadManual(Number(item.precioVentaUnidad || 0).toFixed(2));
+    setPrecioEditadoManualmente(false);
     setShowPriceConfirmModal(false);
     setPendingItemData(null);
     setSearch("");
@@ -367,6 +406,12 @@ function RecibirPedidoPage() {
       toast.error("Este producto no tiene equivalencia interna configurada");
       return;
     }
+    if (priceIncreaseInfo) {
+      const confirmed = window.confirm(
+        `El proveedor subio el precio ${priceIncreaseInfo.changePercent}%\nPrecio anterior: C$${priceIncreaseInfo.prev.toFixed(2)}\nPrecio nuevo: C$${priceIncreaseInfo.next.toFixed(2)}\n\nDeseas continuar?`
+      );
+      if (!confirmed) return;
+    }
 
     const cantidadBase =
       medidaEntrada === "interna"
@@ -472,6 +517,14 @@ function RecibirPedidoPage() {
           proveedorNombre: supplierName,
           costoUnitarioBase: Number(item.costoUnitario || 0),
           fecha: serverTimestamp(),
+        });
+        await addDoc(userCollection("priceHistory"), {
+          productId: item.productDocId,
+          providerId: selectedSupplier,
+          fecha: serverTimestamp(),
+          costoUnitario: Number(item.costoUnitario || 0),
+          cantidad: Number(item.cantidadBase || 0),
+          ordenId: null,
         });
         await upsertProviderProductLink({
           productDocId: item.productDocId,
@@ -751,6 +804,10 @@ function RecibirPedidoPage() {
                 onChange={(e) => handlePrecioVentaUnidadChange(e.target.value)}
               />
               <small>Puedes ajustarlo manualmente y el margen se actualiza.</small>
+              <small>
+                Recomendado por rotacion: C${precioRecomendadoPorRotacion.toFixed(2)} (
+                {margenPorRotacionSugerido}%)
+              </small>
             </div>
 
             <div className="input-group">

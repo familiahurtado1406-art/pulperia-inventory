@@ -1,17 +1,22 @@
 ﻿import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import { getDocs, query, updateDoc, where } from "firebase/firestore";
-import { getStockBaseValue, registerInventoryChange } from "../services/inventoryHistoryService";
+import {
+  getStockBaseValue,
+  registerInventoryChange,
+} from "../services/inventoryHistoryService";
 import { getProviderProductLinksByProvider } from "../services/providerProductService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 function Conteo() {
   const [products, setProducts] = useState([]);
   const [proveedores, setProveedores] = useState([]);
-  const [selectedProveedorId, setSelectedProveedorId] = useState("todos");
+  const [selectedProveedorId, setSelectedProveedorId] = useState("");
   const [conteos, setConteos] = useState({});
   const [adicionalesConteo, setAdicionalesConteo] = useState({});
   const [medidasConteo, setMedidasConteo] = useState({});
   const [productCollectionById, setProductCollectionById] = useState({});
+  const [isSavingAll, setIsSavingAll] = useState(false);
 
   const getStockBase = (product) => getStockBaseValue(product);
   const getUnidadesPorInterna = (product) =>
@@ -24,7 +29,7 @@ function Conteo() {
         proveedoresSnap.docs.map((docItem) => ({
           id: docItem.id,
           ...docItem.data(),
-        }))
+        })),
       );
     };
 
@@ -33,6 +38,12 @@ function Conteo() {
 
   useEffect(() => {
     const fetchProducts = async () => {
+      if (!selectedProveedorId) {
+        setProducts([]);
+        setProductCollectionById({});
+        return;
+      }
+
       const buildQuery = (collectionName) =>
         query(userCollection(collectionName), where("activo", "==", true));
 
@@ -43,13 +54,12 @@ function Conteo() {
         _collection: "products",
       }));
 
-      if (selectedProveedorId !== "todos") {
-        const links = await getProviderProductLinksByProvider(selectedProveedorId);
-        const ids = new Set(
-          links.map((link) => String(link.productDocId || link.productoId || ""))
-        );
-        primaryData = primaryData.filter((item) => ids.has(String(item.id)));
-      }
+      const links =
+        await getProviderProductLinksByProvider(selectedProveedorId);
+      const ids = new Set(
+        links.map((link) => String(link.productDocId || link.productoId || "")),
+      );
+      primaryData = primaryData.filter((item) => ids.has(String(item.id)));
 
       if (primaryData.length > 0) {
         setProducts(primaryData);
@@ -57,12 +67,11 @@ function Conteo() {
           primaryData.reduce((acc, item) => {
             acc[item.id] = "products";
             return acc;
-          }, {})
+          }, {}),
         );
         return;
       }
 
-      // Compatibility fallback for deployments that still use "productos".
       const fallbackSnap = await getDocs(buildQuery("productos"));
       let fallbackData = fallbackSnap.docs.map((docItem) => ({
         id: docItem.id,
@@ -70,20 +79,14 @@ function Conteo() {
         _collection: "productos",
       }));
 
-      if (selectedProveedorId !== "todos") {
-        const links = await getProviderProductLinksByProvider(selectedProveedorId);
-        const ids = new Set(
-          links.map((link) => String(link.productDocId || link.productoId || ""))
-        );
-        fallbackData = fallbackData.filter((item) => ids.has(String(item.id)));
-      }
+      fallbackData = fallbackData.filter((item) => ids.has(String(item.id)));
 
       setProducts(fallbackData);
       setProductCollectionById(
         fallbackData.reduce((acc, item) => {
           acc[item.id] = "productos";
           return acc;
-        }, {})
+        }, {}),
       );
     };
 
@@ -94,11 +97,12 @@ function Conteo() {
 
   const selectedProveedor = useMemo(
     () => proveedores.find((p) => p.id === selectedProveedorId),
-    [proveedores, selectedProveedorId]
+    [proveedores, selectedProveedorId],
   );
 
   const calcularRecomendacion = (product, stockBaseActual) => {
-    const faltante = Number(product.stockObjetivo || 0) - Number(stockBaseActual || 0);
+    const faltante =
+      Number(product.stockObjetivo || 0) - Number(stockBaseActual || 0);
     return faltante > 0 ? faltante : 0;
   };
 
@@ -107,7 +111,8 @@ function Conteo() {
     const minimo = Number(product.stockMin || 0);
 
     if (actual <= minimo) return { label: "Bajo minimo", color: "red" };
-    if (actual <= minimo * 1.2) return { label: "Cerca del minimo", color: "orange" };
+    if (actual <= minimo * 1.2)
+      return { label: "Cerca del minimo", color: "orange" };
     return { label: "OK", color: "green" };
   };
 
@@ -133,56 +138,76 @@ function Conteo() {
       medidaSeleccionada,
       unidadesPorInterna,
       cantidadRaw,
-      cantidadContada,
       adicionalesRaw,
-      adicionales,
       totalBase,
     };
   };
 
-  const handleSaveCount = async (product) => {
-    const cantidadRaw = conteos[product.id];
-    if (cantidadRaw === undefined || cantidadRaw === "") {
-      alert("Ingresa una cantidad contada");
+  const modifiedProducts = visibleProducts.filter((product) => {
+    const { totalBase } = getConteoCalculado(product);
+    const stockAnterior = Number(getStockBase(product) || 0);
+    return Math.abs(Number(totalBase || 0) - stockAnterior) > 0.0001;
+  });
+
+  const handleSaveAllCounts = async () => {
+    if (modifiedProducts.length === 0) {
+      toast("No hay cambios para guardar");
       return;
     }
 
-    const { medidaSeleccionada, unidadesPorInterna, totalBase } = getConteoCalculado(product);
-
-    if (medidaSeleccionada === "interna" && unidadesPorInterna <= 0) {
-      alert("Este producto no tiene equivalencia interna configurada");
-      return;
+    for (const product of modifiedProducts) {
+      const { medidaSeleccionada, unidadesPorInterna } =
+        getConteoCalculado(product);
+      if (medidaSeleccionada === "interna" && unidadesPorInterna <= 0) {
+        toast.error(
+          `"${product.nombre}" no tiene equivalencia interna configurada`,
+        );
+        return;
+      }
     }
 
-    const equivalenteBase = totalBase;
-    const stockAnterior = getStockBase(product);
-
+    setIsSavingAll(true);
     try {
-      const targetCollection = productCollectionById[product.id] || "products";
-      await updateDoc(userDoc(targetCollection, product.id), {
-        stockBase: Number(equivalenteBase),
-        stockActual: Number(equivalenteBase),
-      });
-      await registerInventoryChange({
-        product,
-        tipoMovimiento: "conteo",
-        stockAnterior,
-        stockNuevo: Number(equivalenteBase),
-      });
+      const updatesById = {};
+      for (const product of modifiedProducts) {
+        const { totalBase } = getConteoCalculado(product);
+        const equivalenteBase = Number(totalBase || 0);
+        const stockAnterior = Number(getStockBase(product) || 0);
+        const targetCollection =
+          productCollectionById[product.id] || "products";
+
+        await updateDoc(userDoc(targetCollection, product.id), {
+          stockBase: equivalenteBase,
+          stockActual: equivalenteBase,
+        });
+        await registerInventoryChange({
+          product,
+          tipoMovimiento: "conteo",
+          stockAnterior,
+          stockNuevo: equivalenteBase,
+        });
+        updatesById[product.id] = equivalenteBase;
+      }
 
       setProducts((prev) =>
-        prev.map((p) =>
-          p.id === product.id
-            ? {
-                ...p,
-                stockBase: Number(equivalenteBase),
-                stockActual: Number(equivalenteBase),
-              }
-            : p
-        )
+        prev.map((product) =>
+          updatesById[product.id] === undefined
+            ? product
+            : {
+                ...product,
+                stockBase: updatesById[product.id],
+                stockActual: updatesById[product.id],
+              },
+        ),
+      );
+      toast.success(
+        `Conteo guardado: ${modifiedProducts.length} productos actualizados`,
       );
     } catch (error) {
-      alert(error.message);
+      console.error(error);
+      toast.error("Error al guardar conteo");
+    } finally {
+      setIsSavingAll(false);
     }
   };
 
@@ -196,7 +221,7 @@ function Conteo() {
             value={selectedProveedorId}
             onChange={(e) => setSelectedProveedorId(e.target.value)}
           >
-            <option value="todos">Todos los proveedores</option>
+            <option value="">Seleccione proveedor</option>
             {proveedores.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.nombre}
@@ -204,12 +229,24 @@ function Conteo() {
             ))}
           </select>
         </div>
-
-        {visibleProducts.length === 0 ? (
+        {selectedProveedorId && (
           <p>
-            {selectedProveedorId !== "todos"
-              ? `No hay productos para el proveedor seleccionado (${selectedProveedor?.nombre || selectedProveedorId}).`
-              : "No hay productos para mostrar"}
+            Proveedor:{" "}
+            <strong>{selectedProveedor?.nombre || selectedProveedorId}</strong>{" "}
+            | Productos: <strong>{visibleProducts.length}</strong>
+          </p>
+        )}
+        {selectedProveedorId && (
+          <p>
+            Productos modificados: <strong>{modifiedProducts.length}</strong>
+          </p>
+        )}
+
+        {!selectedProveedorId ? (
+          <p>Seleccione un proveedor para iniciar el conteo.</p>
+        ) : visibleProducts.length === 0 ? (
+          <p>
+            {`No hay productos para el proveedor seleccionado (${selectedProveedor?.nombre || selectedProveedorId}).`}
           </p>
         ) : (
           <div>
@@ -224,7 +261,6 @@ function Conteo() {
                     <th>Equivalente base</th>
                     <th>Estado</th>
                     <th>Recomendado</th>
-                    <th>Guardar</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -237,10 +273,15 @@ function Conteo() {
                       totalBase,
                     } = getConteoCalculado(product);
                     const equivalenteBase = Number(totalBase || 0);
-                    const recomendado = calcularRecomendacion(product, equivalenteBase);
+                    const recomendado = calcularRecomendacion(
+                      product,
+                      equivalenteBase,
+                    );
                     const estado = getStockEstado(product, equivalenteBase);
                     const recomendadoInterna =
-                      unidadesPorInterna > 0 ? recomendado / unidadesPorInterna : null;
+                      unidadesPorInterna > 0
+                        ? recomendado / unidadesPorInterna
+                        : null;
 
                     return (
                       <tr key={product.id}>
@@ -249,11 +290,17 @@ function Conteo() {
                           <select
                             className="input-modern"
                             value={medidaSeleccionada}
-                            onChange={(e) => handleMedidaChange(product.id, e.target.value)}
+                            onChange={(e) =>
+                              handleMedidaChange(product.id, e.target.value)
+                            }
                           >
-                            <option value="base">{product.medidaBase || "UN"}</option>
+                            <option value="base">
+                              {product.medidaBase || "UN"}
+                            </option>
                             {product.medidaInterna && (
-                              <option value="interna">{product.medidaInterna}</option>
+                              <option value="interna">
+                                {product.medidaInterna}
+                              </option>
                             )}
                           </select>
                         </td>
@@ -264,7 +311,10 @@ function Conteo() {
                             step="any"
                             value={cantidadRaw}
                             onChange={(e) =>
-                              setConteos((prev) => ({ ...prev, [product.id]: e.target.value }))
+                              setConteos((prev) => ({
+                                ...prev,
+                                [product.id]: e.target.value,
+                              }))
                             }
                           />
                         </td>
@@ -282,25 +332,20 @@ function Conteo() {
                             }
                           />
                         </td>
-                        <td>{equivalenteBase.toFixed(2)} {product.medidaBase || "UN"}</td>
+                        <td>
+                          {equivalenteBase.toFixed(2)}{" "}
+                          {product.medidaBase || "UN"}
+                        </td>
                         <td style={{ color: estado.color }}>{estado.label}</td>
                         <td>
                           {recomendado > 0
                             ? `Pedir ${recomendado.toFixed(2)} ${product.medidaBase || "UN"}${
-                                recomendadoInterna !== null && product.medidaInterna
+                                recomendadoInterna !== null &&
+                                product.medidaInterna
                                   ? ` (${recomendadoInterna.toFixed(2)} ${product.medidaInterna})`
                                   : ""
                               }`
                             : "Stock suficiente"}
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => handleSaveCount(product)}
-                          >
-                            Guardar
-                          </button>
                         </td>
                       </tr>
                     );
@@ -310,7 +355,7 @@ function Conteo() {
             </div>
 
             <div className="conteo-cards">
-                  {visibleProducts.map((product) => {
+              {visibleProducts.map((product) => {
                 const {
                   medidaSeleccionada,
                   unidadesPorInterna,
@@ -319,17 +364,23 @@ function Conteo() {
                   totalBase,
                 } = getConteoCalculado(product);
                 const equivalenteBase = Number(totalBase || 0);
-                const recomendado = calcularRecomendacion(product, equivalenteBase);
+                const recomendado = calcularRecomendacion(
+                  product,
+                  equivalenteBase,
+                );
                 const estado = getStockEstado(product, equivalenteBase);
                 const recomendadoInterna =
-                  unidadesPorInterna > 0 ? recomendado / unidadesPorInterna : null;
+                  unidadesPorInterna > 0
+                    ? recomendado / unidadesPorInterna
+                    : null;
 
                 return (
                   <div key={`${product.id}-card`} className="conteo-card">
                     <div className="conteo-header">
                       <h4>{product.nombre}</h4>
                       <span className="stock-badge">
-                        Stock actual: {getStockBase(product).toFixed(2)} {product.medidaBase || "UN"}
+                        Stock actual: {getStockBase(product).toFixed(2)}{" "}
+                        {product.medidaBase || "UN"}
                       </span>
                     </div>
 
@@ -339,11 +390,17 @@ function Conteo() {
                         <select
                           className="input-modern"
                           value={medidaSeleccionada}
-                          onChange={(e) => handleMedidaChange(product.id, e.target.value)}
+                          onChange={(e) =>
+                            handleMedidaChange(product.id, e.target.value)
+                          }
                         >
-                          <option value="base">{product.medidaBase || "UN"}</option>
+                          <option value="base">
+                            {product.medidaBase || "UN"}
+                          </option>
                           {product.medidaInterna && (
-                            <option value="interna">{product.medidaInterna}</option>
+                            <option value="interna">
+                              {product.medidaInterna}
+                            </option>
                           )}
                         </select>
                       </div>
@@ -356,7 +413,10 @@ function Conteo() {
                           step="any"
                           value={cantidadRaw}
                           onChange={(e) =>
-                            setConteos((prev) => ({ ...prev, [product.id]: e.target.value }))
+                            setConteos((prev) => ({
+                              ...prev,
+                              [product.id]: e.target.value,
+                            }))
                           }
                         />
                       </div>
@@ -379,35 +439,43 @@ function Conteo() {
 
                     <div className="conteo-info">
                       <p>
-                        Total contado: {equivalenteBase.toFixed(2)} {product.medidaBase || "UN"}
-                        {medidaSeleccionada === "interna" && unidadesPorInterna > 0
+                        Total contado: {equivalenteBase.toFixed(2)}{" "}
+                        {product.medidaBase || "UN"}
+                        {medidaSeleccionada === "interna" &&
+                        unidadesPorInterna > 0
                           ? ` (${(equivalenteBase / unidadesPorInterna).toFixed(2)} ${product.medidaInterna || "INT"})`
                           : ""}
                       </p>
-                      <p>Equivalente: {equivalenteBase.toFixed(2)} {product.medidaBase || "UN"}</p>
+                      <p>
+                        Equivalente: {equivalenteBase.toFixed(2)}{" "}
+                        {product.medidaBase || "UN"}
+                      </p>
                       <p className={`estado-${estado.color}`}>{estado.label}</p>
                       <p>
                         {recomendado > 0
                           ? `Pedir ${recomendado.toFixed(2)} ${product.medidaBase || "UN"}${
-                              recomendadoInterna !== null && product.medidaInterna
+                              recomendadoInterna !== null &&
+                              product.medidaInterna
                                 ? ` (${recomendadoInterna.toFixed(2)} ${product.medidaInterna})`
                                 : ""
                             }`
                           : "Stock suficiente"}
                       </p>
                     </div>
-
-                    <button
-                      type="button"
-                      className="btn-primary full-width"
-                      onClick={() => handleSaveCount(product)}
-                    >
-                      Guardar
-                    </button>
                   </div>
                 );
               })}
             </div>
+
+            <div className="spacer" />
+            <button
+              type="button"
+              className="btn-primary btn-full"
+              onClick={handleSaveAllCounts}
+              disabled={isSavingAll}
+            >
+              {isSavingAll ? "Guardando conteo..." : "Guardar conteo"}
+            </button>
           </div>
         )}
       </div>
@@ -416,5 +484,3 @@ function Conteo() {
 }
 
 export default Conteo;
-
-

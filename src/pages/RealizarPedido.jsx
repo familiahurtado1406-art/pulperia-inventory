@@ -84,6 +84,28 @@ function RealizarPedido() {
     [calcularRecomendadoStock, getRecomendacionRotacion]
   );
 
+  const getPedidoCalculado = useCallback((producto, rowState = {}) => {
+    const unidadesPorInterna = Number(producto.unidadesPorInterna ?? producto.unidadesPorPack ?? 0);
+    const medidaPedido = rowState.medidaPedido || (unidadesPorInterna > 0 ? "interna" : "base");
+    const cantidadPedido = Number(rowState.cantidadPedido || 0);
+    const adicionalesBase = Number(rowState.adicionalesBase || 0);
+
+    const totalBase =
+      medidaPedido === "interna" && unidadesPorInterna > 0
+        ? cantidadPedido * unidadesPorInterna + adicionalesBase
+        : cantidadPedido + adicionalesBase;
+
+    return {
+      medidaPedido,
+      cantidadPedido,
+      adicionalesBase,
+      totalBase: Number(totalBase.toFixed(2)),
+      unidadesPorInterna,
+      equivalenteInterno:
+        unidadesPorInterna > 0 ? Number((totalBase / unidadesPorInterna).toFixed(2)) : null,
+    };
+  }, []);
+
   const mejorProveedorPorProducto = useMemo(() => {
     const map = {};
 
@@ -175,10 +197,18 @@ function RealizarPedido() {
       const pedidoInicial = {};
       data.forEach((p) => {
         const sugerido = Number(calcularRecomendadoFinal(p).toFixed(2));
+        const unidadesPorInterna = Number(p.unidadesPorInterna ?? p.unidadesPorPack ?? 0);
+        const internos = unidadesPorInterna > 0 ? Math.floor(sugerido / unidadesPorInterna) : 0;
+        const adicionales = unidadesPorInterna > 0
+          ? Number((sugerido - internos * unidadesPorInterna).toFixed(2))
+          : 0;
         pedidoInicial[p.id] = {
           sugeridoBase: sugerido,
           pedidoBase: sugerido,
           incluir: sugerido > 0,
+          medidaPedido: unidadesPorInterna > 0 ? "interna" : "base",
+          cantidadPedido: unidadesPorInterna > 0 ? internos : sugerido,
+          adicionalesBase: unidadesPorInterna > 0 ? adicionales : 0,
         };
       });
       setPedido(pedidoInicial);
@@ -197,11 +227,13 @@ function RealizarPedido() {
     const productosPedido = productos
       .filter((p) => {
         const item = pedido[p.id] || {};
-        return item.incluir !== false && Number(item.pedidoBase || 0) > 0;
+        const { totalBase } = getPedidoCalculado(p, item);
+        return item.incluir !== false && Number(totalBase || 0) > 0;
       })
       .map((p) => {
         const item = pedido[p.id] || {};
-        const cantidadBase = Number(item.pedidoBase || 0);
+        const { totalBase, medidaPedido, cantidadPedido, adicionalesBase } = getPedidoCalculado(p, item);
+        const cantidadBase = Number(totalBase || 0);
         const relationCost = Number(providerLinkByProductId[p.id]?.costoUnitario || 0);
         const costoUnitarioBase =
           relationCost > 0 ? relationCost : Number(p.costoUnitarioBase ?? p.costoUnitario ?? 0);
@@ -220,6 +252,9 @@ function RealizarPedido() {
           sugeridoBase,
           pedidoBase: cantidadBase,
           incluido: item.incluir !== false,
+          medidaPedido,
+          cantidadPedido,
+          adicionalesBase,
           sugeridoPack,
           pedidoPack,
           medidaBase: p.medidaBase || "UN",
@@ -295,10 +330,18 @@ function RealizarPedido() {
             productos.forEach((p) => {
               const actual = prev[p.id] || {};
               const sugerido = Number(actual.sugeridoBase || 0);
+              const unidadesPorInterna = Number(p.unidadesPorInterna ?? p.unidadesPorPack ?? 0);
+              const internos = unidadesPorInterna > 0 ? Math.floor(sugerido / unidadesPorInterna) : 0;
+              const adicionales = unidadesPorInterna > 0
+                ? Number((sugerido - internos * unidadesPorInterna).toFixed(2))
+                : 0;
               next[p.id] = {
                 ...actual,
                 incluir: sugerido > 0,
                 pedidoBase: sugerido,
+                medidaPedido: unidadesPorInterna > 0 ? "interna" : "base",
+                cantidadPedido: unidadesPorInterna > 0 ? internos : sugerido,
+                adicionalesBase: unidadesPorInterna > 0 ? adicionales : 0,
               };
             });
             return next;
@@ -327,6 +370,7 @@ function RealizarPedido() {
                 const recomendadoRotacion = getRecomendacionRotacion(p);
                 const recomendadoFinal = recomendadoStock + recomendadoRotacion;
                 const rowState = pedido[p.id] || {};
+                const pedidoCalculado = getPedidoCalculado(p, rowState);
                 const incluir = rowState.incluir !== false;
                 return (
                   <tr key={`${p.id}-table`}>
@@ -347,16 +391,8 @@ function RealizarPedido() {
                       <input
                         type="number"
                         className="input-modern"
-                        value={Number(rowState.pedidoBase || 0)}
-                        onChange={(e) =>
-                          setPedido((prev) => ({
-                            ...prev,
-                            [p.id]: {
-                              ...(prev[p.id] || {}),
-                              pedidoBase: Number(e.target.value || 0),
-                            },
-                          }))
-                        }
+                        value={Number(pedidoCalculado.totalBase || 0)}
+                        readOnly
                         disabled={!incluir}
                       />
                     </td>
@@ -374,7 +410,8 @@ function RealizarPedido() {
           const unidadesPorInterna = Number(p.unidadesPorInterna ?? p.unidadesPorPack ?? 0);
           const stateItem = pedido[p.id] || {};
           const sugeridoBase = Number(stateItem.sugeridoBase ?? recomendado ?? 0);
-          const pedidoBase = Number(stateItem.pedidoBase ?? recomendado ?? 0);
+          const pedidoCalculado = getPedidoCalculado(p, stateItem);
+          const pedidoBase = Number(pedidoCalculado.totalBase ?? recomendado ?? 0);
           const incluir = stateItem.incluir !== false;
           const sugeridoPack = unidadesPorInterna > 0 ? sugeridoBase / unidadesPorInterna : null;
           const pedidoPack = unidadesPorInterna > 0 ? pedidoBase / unidadesPorInterna : null;
@@ -398,7 +435,9 @@ function RealizarPedido() {
                 <p>
                   Inventario actual:{" "}
                   <strong>
-                    {getStockBase(p).toFixed(2)} {p.medidaBase || "UN"}
+                    {unidadesPorInterna > 0
+                      ? `${(getStockBase(p) / unidadesPorInterna).toFixed(2)} ${p.medidaInterna || "PACK"} (${getStockBase(p).toFixed(2)} ${p.medidaBase || "UN"})`
+                      : `${getStockBase(p).toFixed(2)} ${p.medidaBase || "UN"}`}
                   </strong>
                 </p>
                 <p className="recomendado">
@@ -437,6 +476,20 @@ function RealizarPedido() {
                       ` (${pedidoPack.toFixed(2)} ${p.medidaInterna || "PACK"})`}
                   </strong>
                 </p>
+                <p>
+                  Total pedido:{" "}
+                  <strong>
+                    {pedidoCalculado.totalBase.toFixed(2)} {p.medidaBase || "UN"}
+                  </strong>
+                </p>
+                {pedidoCalculado.equivalenteInterno !== null && (
+                  <p>
+                    Equivalente:{" "}
+                    <strong>
+                      {pedidoCalculado.equivalenteInterno.toFixed(2)} {p.medidaInterna || "PACK"}
+                    </strong>
+                  </p>
+                )}
                 {mejor && (
                   <p className="best-provider">
                     Mejor proveedor: <strong>{mejor.proveedorNombre || mejor.proveedorId}</strong>{" "}
@@ -465,17 +518,53 @@ function RealizarPedido() {
                   />{" "}
                   Incluir en pedido
                 </label>
-                <label>Unidades a pedir</label>
-                <input
-                  type="number"
+                <label>Medida</label>
+                <select
                   className="input-modern"
-                  value={pedidoBase}
+                  value={pedidoCalculado.medidaPedido}
                   onChange={(e) =>
                     setPedido((prev) => ({
                       ...prev,
                       [p.id]: {
                         ...(prev[p.id] || {}),
-                        pedidoBase: Number(e.target.value || 0),
+                        medidaPedido: e.target.value,
+                        cantidadPedido: "",
+                        adicionalesBase: "",
+                      },
+                    }))
+                  }
+                  disabled={!incluir}
+                >
+                  <option value="base">{p.medidaBase || "UN"}</option>
+                  {unidadesPorInterna > 0 && <option value="interna">{p.medidaInterna || "PACK"}</option>}
+                </select>
+                <label>Cantidad</label>
+                <input
+                  type="number"
+                  className="input-modern"
+                  value={pedidoCalculado.cantidadPedido}
+                  onChange={(e) =>
+                    setPedido((prev) => ({
+                      ...prev,
+                      [p.id]: {
+                        ...(prev[p.id] || {}),
+                        cantidadPedido: e.target.value,
+                      },
+                    }))
+                  }
+                  disabled={!incluir}
+                />
+                <label>UN adicionales</label>
+                <input
+                  type="number"
+                  className="input-modern"
+                  value={pedidoCalculado.adicionalesBase}
+                  onChange={(e) =>
+                    setPedido((prev) => ({
+                      ...prev,
+                      [p.id]: {
+                        ...(prev[p.id] || {}),
+                        adicionalesBase: e.target.value,
                       },
                     }))
                   }
@@ -486,57 +575,70 @@ function RealizarPedido() {
                     type="button"
                     className="btn-secondary"
                     onClick={() =>
-                      setPedido((prev) => ({
-                        ...prev,
-                        [p.id]: {
-                          ...(prev[p.id] || {}),
-                          pedidoBase: sugeridoBase,
-                        },
-                      }))
+                      setPedido((prev) => {
+                        const internos = unidadesPorInterna > 0
+                          ? Math.floor(sugeridoBase / unidadesPorInterna)
+                          : 0;
+                        const adicionales = unidadesPorInterna > 0
+                          ? Number((sugeridoBase - internos * unidadesPorInterna).toFixed(2))
+                          : 0;
+                        return {
+                          ...prev,
+                          [p.id]: {
+                            ...(prev[p.id] || {}),
+                            medidaPedido: unidadesPorInterna > 0 ? "interna" : "base",
+                            cantidadPedido: unidadesPorInterna > 0 ? internos : sugeridoBase,
+                            adicionalesBase: unidadesPorInterna > 0 ? adicionales : 0,
+                            pedidoBase: sugeridoBase,
+                          },
+                        };
+                      })
                     }
                   >
                     Usar sugerido
                   </button>
-                  {unidadesPorInterna > 0 && (
-                    <>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() =>
-                          setPedido((prev) => {
-                            const current = Number(prev[p.id]?.pedidoBase || 0);
-                            return {
-                              ...prev,
-                              [p.id]: {
-                                ...(prev[p.id] || {}),
-                                pedidoBase: Math.max(0, current - unidadesPorInterna),
-                              },
-                            };
-                          })
-                        }
-                      >
-                        -1 {p.medidaInterna || "PACK"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() =>
-                          setPedido((prev) => {
-                            const current = Number(prev[p.id]?.pedidoBase || 0);
-                            return {
-                              ...prev,
-                              [p.id]: {
-                                ...(prev[p.id] || {}),
-                                pedidoBase: current + unidadesPorInterna,
-                              },
-                            };
-                          })
-                        }
-                      >
-                        +1 {p.medidaInterna || "PACK"}
-                      </button>
-                    </>
-                  )}
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() =>
+                      setPedido((prev) => {
+                        const currentMedida =
+                          prev[p.id]?.medidaPedido || (unidadesPorInterna > 0 ? "interna" : "base");
+                        const currentCantidad = Number(prev[p.id]?.cantidadPedido || 0);
+                        return {
+                          ...prev,
+                          [p.id]: {
+                            ...(prev[p.id] || {}),
+                            cantidadPedido: Math.max(0, currentCantidad - 1),
+                            medidaPedido: currentMedida,
+                          },
+                        };
+                      })
+                    }
+                  >
+                    -1 {pedidoCalculado.medidaPedido === "interna" ? p.medidaInterna || "PACK" : p.medidaBase || "UN"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() =>
+                      setPedido((prev) => {
+                        const currentMedida =
+                          prev[p.id]?.medidaPedido || (unidadesPorInterna > 0 ? "interna" : "base");
+                        const currentCantidad = Number(prev[p.id]?.cantidadPedido || 0);
+                        return {
+                          ...prev,
+                          [p.id]: {
+                            ...(prev[p.id] || {}),
+                            cantidadPedido: currentCantidad + 1,
+                            medidaPedido: currentMedida,
+                          },
+                        };
+                      })
+                    }
+                  >
+                    +1 {pedidoCalculado.medidaPedido === "interna" ? p.medidaInterna || "PACK" : p.medidaBase || "UN"}
+                  </button>
                 </div>
               </div>
             </div>
