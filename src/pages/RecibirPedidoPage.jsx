@@ -151,7 +151,11 @@ function RecibirPedidoPage() {
   }, [costoUnitario, margenPorRotacionSugerido]);
 
   const totalInvertido = useMemo(
-    () => receivedItems.reduce((acc, item) => acc + Number(item.totalFactura || 0), 0),
+    () =>
+      receivedItems.reduce(
+        (acc, item) => acc + Number(item.costoConImpuesto ?? item.totalFactura ?? 0),
+        0
+      ),
     [receivedItems]
   );
   const gananciaTotal = useMemo(
@@ -166,6 +170,10 @@ function RecibirPedidoPage() {
     if (totalInvertido <= 0) return 0;
     return (gananciaTotal / totalInvertido) * 100;
   }, [gananciaTotal, totalInvertido]);
+  const totalIvaPagado = useMemo(
+    () => receivedItems.reduce((acc, item) => acc + Number(item.ivaMonto || 0), 0),
+    [receivedItems]
+  );
 
   const loadSupplierProducts = async (supplierId) => {
     if (!supplierId) {
@@ -286,7 +294,7 @@ function RecibirPedidoPage() {
     setCantidad(String(Number(item.cantidadIngresada || 0)));
     setCantidadBaseAdicional(String(Number(item.cantidadBaseAdicional || 0)));
     setTipoImpuesto(item.impuestoTipo || "NO_IMPUESTO");
-    setCostoTotal(String(Number(item.totalFactura || 0)));
+    setCostoTotal(String(Number(item.costoSinImpuesto ?? item.totalFactura ?? 0)));
     setMargen(String(Number(item.margen || 0)));
     setPrecioOriginal(Number(item.precioVentaUnidad || 0));
     setPrecioVentaUnidadManual(Number(item.precioVentaUnidad || 0).toFixed(2));
@@ -355,7 +363,8 @@ function RecibirPedidoPage() {
       margen: margenFinal,
       precioVentaUnidad: precioFinalNum,
       gananciaUnidad: gananciaUnidadFinal,
-      totalFactura: Number(costoTotal || 0),
+      costoSinImpuesto: Number(costoTotal || 0),
+      totalFactura: Number(costoConImpuesto || 0),
       impuestoTipo: tipoImpuesto,
       ivaMonto,
       costoConImpuesto,
@@ -836,7 +845,7 @@ function RecibirPedidoPage() {
             </p>
             <p>Equivalente: {previewCantidadBase.toFixed(2)} {selectedProduct.medidaBase || "UN"}</p>
             <p>Stock final: {previewStockFinal.toFixed(2)} {selectedProduct.medidaBase || "UN"}</p>
-            <p>Inversion total: C${Number(costoTotal || 0).toFixed(2)}</p>
+            <p>Inversion total: C${Number(costoConImpuesto || 0).toFixed(2)}</p>
             <p>Ganancia estimada: C${previewGananciaTotal.toFixed(2)}</p>
           </div>
         </div>
@@ -878,6 +887,7 @@ function RecibirPedidoPage() {
           <div className="summary-card">
             <p>Total Invertido</p>
             <h3>C${totalInvertido.toFixed(2)}</h3>
+            <small>Incluye IVA. IVA pagado: C${totalIvaPagado.toFixed(2)}</small>
           </div>
           <div className="summary-card ganancia">
             <p>Ganancia Estimada</p>
@@ -901,6 +911,7 @@ function RecibirPedidoPage() {
                 <th>Precio Venta Unidad</th>
                 <th>Ganancia Unidad</th>
                 <th>Ganancia Total</th>
+                <th>IVA</th>
                 <th>Total Factura</th>
                 <th>Acciones</th>
               </tr>
@@ -927,6 +938,7 @@ function RecibirPedidoPage() {
                   <td>
                     {(Number(item.gananciaUnidad || 0) * Number(item.cantidadBase || 0)).toFixed(2)}
                   </td>
+                  <td>{Number(item.ivaMonto || 0).toFixed(2)}</td>
                   <td>{item.totalFactura.toFixed(2)}</td>
                   <td>
                     <div style={{ display: "flex", gap: "8px" }}>

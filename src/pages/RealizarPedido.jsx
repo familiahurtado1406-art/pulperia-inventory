@@ -87,8 +87,10 @@ function RealizarPedido() {
   const getPedidoCalculado = useCallback((producto, rowState = {}) => {
     const unidadesPorInterna = Number(producto.unidadesPorInterna ?? producto.unidadesPorPack ?? 0);
     const medidaPedido = rowState.medidaPedido || (unidadesPorInterna > 0 ? "interna" : "base");
-    const cantidadPedido = Number(rowState.cantidadPedido || 0);
-    const adicionalesBase = Number(rowState.adicionalesBase || 0);
+    const cantidadPedidoRaw = rowState.cantidadPedido ?? "";
+    const adicionalesBaseRaw = rowState.adicionalesBase ?? "";
+    const cantidadPedido = Number(cantidadPedidoRaw || 0);
+    const adicionalesBase = Number(adicionalesBaseRaw || 0);
 
     const totalBase =
       medidaPedido === "interna" && unidadesPorInterna > 0
@@ -97,7 +99,9 @@ function RealizarPedido() {
 
     return {
       medidaPedido,
+      cantidadPedidoRaw,
       cantidadPedido,
+      adicionalesBaseRaw,
       adicionalesBase,
       totalBase: Number(totalBase.toFixed(2)),
       unidadesPorInterna,
@@ -198,17 +202,13 @@ function RealizarPedido() {
       data.forEach((p) => {
         const sugerido = Number(calcularRecomendadoFinal(p).toFixed(2));
         const unidadesPorInterna = Number(p.unidadesPorInterna ?? p.unidadesPorPack ?? 0);
-        const internos = unidadesPorInterna > 0 ? Math.floor(sugerido / unidadesPorInterna) : 0;
-        const adicionales = unidadesPorInterna > 0
-          ? Number((sugerido - internos * unidadesPorInterna).toFixed(2))
-          : 0;
         pedidoInicial[p.id] = {
           sugeridoBase: sugerido,
           pedidoBase: sugerido,
           incluir: sugerido > 0,
           medidaPedido: unidadesPorInterna > 0 ? "interna" : "base",
-          cantidadPedido: unidadesPorInterna > 0 ? internos : sugerido,
-          adicionalesBase: unidadesPorInterna > 0 ? adicionales : 0,
+          cantidadPedido: "",
+          adicionalesBase: "",
         };
       });
       setPedido(pedidoInicial);
@@ -542,7 +542,8 @@ function RealizarPedido() {
                 <input
                   type="number"
                   className="input-modern"
-                  value={pedidoCalculado.cantidadPedido}
+                  value={pedidoCalculado.cantidadPedidoRaw}
+                  placeholder="0"
                   onChange={(e) =>
                     setPedido((prev) => ({
                       ...prev,
@@ -558,7 +559,8 @@ function RealizarPedido() {
                 <input
                   type="number"
                   className="input-modern"
-                  value={pedidoCalculado.adicionalesBase}
+                  value={pedidoCalculado.adicionalesBaseRaw}
+                  placeholder="0"
                   onChange={(e) =>
                     setPedido((prev) => ({
                       ...prev,
