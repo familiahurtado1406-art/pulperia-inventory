@@ -42,6 +42,9 @@ const readStoredFilters = () => {
   }
 };
 
+const buildVariantId = () =>
+  `v_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
 function Products() {
   const navigate = useNavigate();
   const [products, setProducts] = useState([]);
@@ -62,6 +65,13 @@ function Products() {
   const [costoPack, setCostoPack] = useState("");
   const [margen, setMargen] = useState("20");
   const [precioVentaManual, setPrecioVentaManual] = useState("");
+  const [variants, setVariants] = useState([]);
+  const [showVariantModal, setShowVariantModal] = useState(false);
+  const [variantName, setVariantName] = useState("");
+  const [variantUnits, setVariantUnits] = useState("");
+  const [variantDiscount, setVariantDiscount] = useState("10");
+  const [variantPriceManual, setVariantPriceManual] = useState("");
+  const [variantBarcode, setVariantBarcode] = useState("");
 
   const [editingProduct, setEditingProduct] = useState(null);
   const [openForm, setOpenForm] = useState(false);
@@ -92,6 +102,14 @@ function Products() {
 
   const precioVenta =
     precioVentaManual === "" ? precioVentaCalculado : Number(precioVentaManual);
+  const variantPriceSuggested = useMemo(() => {
+    const units = Number(variantUnits || 0);
+    const baseUnitPrice = Number(precioVenta || 0);
+    const discount = Number(variantDiscount || 0);
+    if (units <= 0 || baseUnitPrice <= 0) return 0;
+    const baseTotal = baseUnitPrice * units;
+    return Number((baseTotal * (1 - discount / 100)).toFixed(2));
+  }, [variantUnits, precioVenta, variantDiscount]);
 
   const fetchProducts = async () => {
     const [snapshot, proveedoresSnap, linksSnapA, linksSnapB, analytics] = await Promise.all([
@@ -243,6 +261,39 @@ function Products() {
     setDraftRotationFilter("all");
   };
 
+  const resetVariantForm = () => {
+    setVariantName("");
+    setVariantUnits("");
+    setVariantDiscount("10");
+    setVariantPriceManual("");
+    setVariantBarcode("");
+  };
+
+  const handleAddVariant = () => {
+    const name = variantName.trim();
+    const units = Number(variantUnits || 0);
+    const price = Number(
+      variantPriceManual === "" ? variantPriceSuggested : variantPriceManual
+    );
+    if (!name || units <= 0 || price <= 0) {
+      toast.error("Completa nombre, unidades y precio de la presentacion");
+      return;
+    }
+
+    setVariants((prev) => [
+      ...prev,
+      {
+        id: buildVariantId(),
+        name,
+        units,
+        price: Number(price.toFixed(2)),
+        barcode: variantBarcode.trim() || null,
+      },
+    ]);
+    setShowVariantModal(false);
+    resetVariantForm();
+  };
+
   const generateProductId = (name, existingProducts) => {
     const clean = (name || "").trim();
     const prefix = clean.slice(0, 3).toUpperCase().padEnd(3, "X");
@@ -299,6 +350,9 @@ function Products() {
     setCostoPack("");
     setMargen("20");
     setPrecioVentaManual("");
+    setVariants([]);
+    setShowVariantModal(false);
+    resetVariantForm();
     setSearchTerm("");
     setSuggestions([]);
     setProvidersTemp([]);
@@ -328,6 +382,13 @@ function Products() {
           precioVentaBase: Number(precioVenta || 0),
           costoUnitario: Number(costoUnitario || 0),
           precioVenta: Number(precioVenta || 0),
+          variants: variants.map((variant) => ({
+            id: String(variant.id || buildVariantId()),
+            name: String(variant.name || "").trim(),
+            units: Number(variant.units || 0),
+            price: Number(variant.price || 0),
+            barcode: variant.barcode ? String(variant.barcode) : null,
+          })),
           ultimaActualizacion: serverTimestamp(),
         });
 
@@ -365,6 +426,13 @@ function Products() {
           precioVentaBase: Number(precioVenta || 0),
           costoUnitario: Number(costoUnitario || 0),
           precioVenta: Number(precioVenta || 0),
+          variants: variants.map((variant) => ({
+            id: String(variant.id || buildVariantId()),
+            name: String(variant.name || "").trim(),
+            units: Number(variant.units || 0),
+            price: Number(variant.price || 0),
+            barcode: variant.barcode ? String(variant.barcode) : null,
+          })),
           ultimaActualizacion: serverTimestamp(),
           createdAt: serverTimestamp(),
         });
@@ -418,6 +486,17 @@ function Products() {
     setCostoPack(product.costoPack === null || product.costoPack === undefined ? "" : String(product.costoPack));
     setMargen(String(product.margen ?? 20));
     setPrecioVentaManual(String(product.precioVentaBase ?? product.precioVenta ?? ""));
+    setVariants(
+      Array.isArray(product.variants)
+        ? product.variants.map((variant) => ({
+            id: String(variant.id || buildVariantId()),
+            name: String(variant.name || ""),
+            units: Number(variant.units || 0),
+            price: Number(variant.price || 0),
+            barcode: variant.barcode || null,
+          }))
+        : []
+    );
     setProvidersTemp([]);
     setOpenForm(true);
   };
@@ -766,6 +845,45 @@ function Products() {
                   <small>Opcional.</small>
                 </div>
 
+                <div className="input-group">
+                  <label>Presentaciones de venta</label>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setShowVariantModal(true)}
+                  >
+                    + Agregar presentacion
+                  </button>
+                  {variants.length === 0 ? (
+                    <small>No hay presentaciones configuradas.</small>
+                  ) : (
+                    <div className="pedido-list">
+                      {variants.map((variant, index) => (
+                        <div key={variant.id || `${variant.name}-${index}`} className="pedido-card">
+                          <p>
+                            <strong>{variant.name}</strong>
+                          </p>
+                          <p>
+                            {variant.units} {medidaBase} - C${Number(variant.price || 0).toFixed(2)}
+                          </p>
+                          {variant.barcode && <p>Codigo: {variant.barcode}</p>}
+                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() =>
+                                setVariants((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
+                              }
+                            >
+                              Eliminar
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <label className="checkbox-row">
                   Activo:
                   <input
@@ -857,6 +975,79 @@ function Products() {
               </button>
               <button type="button" className="btn-primary" onClick={applyFilters}>
                 Aplicar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showVariantModal && (
+        <div className="modal-overlay" onClick={() => setShowVariantModal(false)}>
+          <div className="modal modal-compact" onClick={(e) => e.stopPropagation()}>
+            <h3>Agregar presentacion</h3>
+            <div className="input-group">
+              <label>Nombre presentacion</label>
+              <input
+                className="input-modern"
+                value={variantName}
+                onChange={(e) => setVariantName(e.target.value)}
+                placeholder="Ej: Pack 12"
+              />
+            </div>
+            <div className="input-group">
+              <label>Unidades que contiene</label>
+              <input
+                type="number"
+                className="input-modern"
+                value={variantUnits}
+                onChange={(e) => setVariantUnits(e.target.value)}
+                placeholder="12"
+              />
+            </div>
+            <div className="input-group">
+              <label>Descuento pack (%)</label>
+              <input
+                type="number"
+                className="input-modern"
+                value={variantDiscount}
+                onChange={(e) => setVariantDiscount(e.target.value)}
+              />
+            </div>
+            <div className="input-group">
+              <label>Precio sugerido</label>
+              <input className="input-modern" value={variantPriceSuggested} readOnly />
+            </div>
+            <div className="input-group">
+              <label>Precio final</label>
+              <input
+                type="number"
+                className="input-modern"
+                value={variantPriceManual}
+                onChange={(e) => setVariantPriceManual(e.target.value)}
+                placeholder={String(variantPriceSuggested || 0)}
+              />
+            </div>
+            <div className="input-group">
+              <label>Codigo de barras (opcional)</label>
+              <input
+                className="input-modern"
+                value={variantBarcode}
+                onChange={(e) => setVariantBarcode(e.target.value)}
+              />
+            </div>
+            <div className="modal-buttons">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowVariantModal(false);
+                  resetVariantForm();
+                }}
+              >
+                Cancelar
+              </button>
+              <button type="button" className="btn-primary" onClick={handleAddVariant}>
+                Guardar presentacion
               </button>
             </div>
           </div>

@@ -79,6 +79,9 @@ export default function AppLayout({ title, children, onAdd, onRefresh }) {
           <Link to="/pedido" onClick={() => setOpenDrawer(false)}>
             Realizar Pedido
           </Link>
+          <Link to="/pos" onClick={() => setOpenDrawer(false)}>
+            POS
+          </Link>
           <Link to="/historial-pedidos" onClick={() => setOpenDrawer(false)}>
             Historial Pedidos
           </Link>

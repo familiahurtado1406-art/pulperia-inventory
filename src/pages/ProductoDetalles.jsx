@@ -343,6 +343,17 @@ function ProductoDetalles() {
           Precio venta: C${precioVenta.toFixed(2)} | Costo unitario: C${costoUnitario.toFixed(2)}
         </p>
         <p>Margen: {Number(product.margen || 0).toFixed(2)}%</p>
+        {Array.isArray(product.variants) && product.variants.length > 0 && (
+          <div className="spacer">
+            <h4>Presentaciones</h4>
+            {product.variants.map((variant, index) => (
+              <p key={variant.id || `${variant.name || "variant"}-${index}`}>
+                {String(variant.name || "Presentacion")} - {Number(variant.units || 0)}{" "}
+                {product.medidaBase || "UN"} - C${Number(variant.price || 0).toFixed(2)}
+              </p>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="section-card">
