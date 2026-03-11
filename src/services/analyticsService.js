@@ -256,21 +256,45 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
       getDocs(userCollection("proveedorProducto")),
     ]);
   let movimientosSalida = [];
+  let hasModernInventoryMovements = false;
   try {
-    const movementsSnap = await getDocs(
+    const inventoryMovementsSnap = await getDocs(
       query(
-        userCollection("movimientos"),
+        userCollection("inventory_movements"),
         where("type", "==", "salida"),
         where("createdAt", ">=", Timestamp.fromDate(monthAgoDate))
       )
     );
-    movimientosSalida = movementsSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+    if (!inventoryMovementsSnap.empty) {
+      movimientosSalida = inventoryMovementsSnap.docs.map((docItem) => ({
+        id: docItem.id,
+        ...docItem.data(),
+      }));
+      hasModernInventoryMovements = true;
+    }
   } catch {
-    const movementsSnap = await getDocs(userCollection("movimientos"));
-    movimientosSalida = movementsSnap.docs
-      .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
-      .filter((movement) => String(movement.type || "").toLowerCase() === "salida")
-      .filter((movement) => toMillis(movement.createdAt || movement.fecha) >= monthAgo);
+    hasModernInventoryMovements = false;
+  }
+  if (!hasModernInventoryMovements) {
+    try {
+      const movementsSnap = await getDocs(
+        query(
+          userCollection("movimientos"),
+          where("type", "==", "salida"),
+          where("createdAt", ">=", Timestamp.fromDate(monthAgoDate))
+        )
+      );
+      movimientosSalida = movementsSnap.docs.map((docItem) => ({
+        id: docItem.id,
+        ...docItem.data(),
+      }));
+    } catch {
+      const movementsSnap = await getDocs(userCollection("movimientos"));
+      movimientosSalida = movementsSnap.docs
+        .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+        .filter((movement) => String(movement.type || "").toLowerCase() === "salida")
+        .filter((movement) => toMillis(movement.createdAt || movement.fecha) >= monthAgo);
+    }
   }
 
   const products = productsSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));

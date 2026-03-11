@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  addDoc,
+  doc,
   getDocs,
   increment,
   query,
   serverTimestamp,
-  updateDoc,
+  writeBatch,
   where,
 } from "firebase/firestore";
+import { db } from "../firebase/config";
 import {
   getStockBaseValue,
   registerInventoryChange,
@@ -471,6 +472,7 @@ function RecibirPedidoPage() {
     setIsSavingPedido(true);
 
     try {
+      const batch = writeBatch(db);
       const supplierName =
         suppliers.find((supplier) => supplier.id === selectedSupplier)?.nombre ||
         selectedSupplier;
@@ -479,6 +481,8 @@ function RecibirPedidoPage() {
         return acc;
       }, {});
       const movementItems = [];
+      const historyTasks = [];
+      const providerLinkTasks = [];
 
       for (const item of receivedItems) {
         const stockAnterior = Number(currentStockByProduct[item.productDocId] || 0);
@@ -509,25 +513,19 @@ function RecibirPedidoPage() {
           updatePayload.precioVenta = Number(item.precioVentaUnidad);
         }
 
-        await updateDoc(userDoc("products", item.productDocId), updatePayload);
-        await registerInventoryChange({
-          product: {
-            id: item.productDocId,
-            productoId: item.productDocId,
-            nombre: item.nombre,
-          },
-          tipoMovimiento: "recibir_pedido",
-          stockAnterior,
-          stockNuevo,
-        });
+        batch.update(userDoc("products", item.productDocId), updatePayload);
 
-        await addDoc(userSubcollection("products", item.productDocId, "historialPrecios"), {
+        const historialPrecioRef = doc(
+          userSubcollection("products", item.productDocId, "historialPrecios")
+        );
+        batch.set(historialPrecioRef, {
           proveedorId: selectedSupplier,
           proveedorNombre: supplierName,
           costoUnitarioBase: Number(item.costoUnitario || 0),
           fecha: serverTimestamp(),
         });
-        await addDoc(userCollection("priceHistory"), {
+        const priceHistoryRef = doc(userCollection("priceHistory"));
+        batch.set(priceHistoryRef, {
           productId: item.productDocId,
           providerId: selectedSupplier,
           fecha: serverTimestamp(),
@@ -535,7 +533,40 @@ function RecibirPedidoPage() {
           cantidad: Number(item.cantidadBase || 0),
           ordenId: null,
         });
-        await upsertProviderProductLink({
+
+        const inventoryMovementRef = doc(userCollection("inventory_movements"));
+        batch.set(inventoryMovementRef, {
+          productId: item.productDocId,
+          productoId: item.productDocId,
+          type: "entrada",
+          tipoMovimiento: "entrada_compra",
+          cantidadBase: Number(item.cantidadBase || 0),
+          unidades: Number(item.cantidadBase || 0),
+          medidaBase: item.medidaBase || "UN",
+          providerId: selectedSupplier,
+          referenceId: null,
+          source: "recibir_pedido",
+          priceUnit: Number(item.costoUnitario || 0),
+          total: Number(item.costoConImpuesto ?? item.totalFactura ?? 0),
+          variant: null,
+          createdAt: serverTimestamp(),
+        });
+
+        historyTasks.push(
+          registerInventoryChange({
+            product: {
+              id: item.productDocId,
+              productoId: item.productDocId,
+              nombre: item.nombre,
+            },
+            tipoMovimiento: "recibir_pedido",
+            stockAnterior,
+            stockNuevo,
+          })
+        );
+
+        providerLinkTasks.push(
+          upsertProviderProductLink({
           productDocId: item.productDocId,
           productoId: item.productDocId,
           proveedorId: selectedSupplier,
@@ -543,7 +574,8 @@ function RecibirPedidoPage() {
           costoUnitario: Number(item.costoUnitario || 0),
           costoPack: null,
           activo: true,
-        });
+          })
+        );
 
         currentStockByProduct[item.productDocId] = stockNuevo;
         movementItems.push({
@@ -558,15 +590,33 @@ function RecibirPedidoPage() {
         });
       }
 
-      await addDoc(userCollection("movimientos"), {
+      const movimientoRef = doc(userCollection("movimientos"));
+      batch.set(movimientoRef, {
         type: "entrada",
         supplierId: selectedSupplier,
         items: movementItems,
         createdAt: serverTimestamp(),
       });
+      await batch.commit();
+
+      const historyResults = await Promise.allSettled(historyTasks);
+      const providerResults = await Promise.allSettled(providerLinkTasks);
+      const hasBackgroundErrors = [...historyResults, ...providerResults].some(
+        (result) => result.status === "rejected"
+      );
+      if (hasBackgroundErrors) {
+        console.error("Errores en tareas secundarias de guardado", {
+          historyResults,
+          providerResults,
+        });
+      }
 
       setReceivedItems([]);
-      toast.success("Pedido registrado correctamente");
+      toast.success(
+        hasBackgroundErrors
+          ? "Pedido guardado (con algunas tareas secundarias pendientes)"
+          : "Pedido registrado correctamente"
+      );
       await loadSupplierProducts(selectedSupplier);
     } catch (error) {
       console.error(error);

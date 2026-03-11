@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  addDoc,
+  doc,
   getDocs,
   increment,
   query,
   serverTimestamp,
-  updateDoc,
+  writeBatch,
   where,
 } from "firebase/firestore";
+import { db } from "../firebase/config";
 import { getStockBaseValue, registerInventoryChange } from "../services/inventoryHistoryService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 
@@ -31,10 +32,14 @@ const getProductVariants = (product) => {
 };
 
 function PosPage() {
+  const searchInputRef = useRef(null);
+  const cashInputRef = useRef(null);
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState([]);
   const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [receivedCash, setReceivedCash] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -47,7 +52,7 @@ function PosPage() {
 
   const visibleProducts = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return products.slice(0, 20);
+    if (!term) return [];
     return products
       .filter((product) => String(product.nombre || "").toLowerCase().includes(term))
       .slice(0, 20);
@@ -58,6 +63,16 @@ function PosPage() {
       cart.reduce((acc, item) => acc + Number(item.price || 0) * Number(item.qty || 0), 0),
     [cart]
   );
+  const changeAmount = useMemo(() => {
+    if (paymentMethod !== "cash") return 0;
+    const cash = Number(receivedCash || 0);
+    return Number((cash - Number(total || 0)).toFixed(2));
+  }, [paymentMethod, receivedCash, total]);
+
+  useEffect(() => {
+    if (!showPaymentModal || paymentMethod !== "cash") return;
+    if (cashInputRef.current) cashInputRef.current.focus();
+  }, [showPaymentModal, paymentMethod]);
 
   const addToCart = (product, variant) => {
     const key = `${product.id}__${variant.id || variant.name}`;
@@ -84,6 +99,10 @@ function PosPage() {
         },
       ];
     });
+    setSearch("");
+    if (searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
   };
 
   const updateQty = (key, nextQty) => {
@@ -111,6 +130,13 @@ function PosPage() {
       toast.error("El carrito esta vacio");
       return;
     }
+    if (paymentMethod === "cash") {
+      const cash = Number(receivedCash || 0);
+      if (!Number.isFinite(cash) || cash < Number(total || 0)) {
+        toast.error("El dinero recibido es menor al total");
+        return;
+      }
+    }
 
     const productById = products.reduce((acc, product) => {
       acc[product.id] = product;
@@ -137,6 +163,7 @@ function PosPage() {
 
     setIsSaving(true);
     try {
+      const batch = writeBatch(db);
       const saleItems = cart.map((line) => {
         const qty = Number(line.qty || 0);
         const unitsTotal = Number(line.unitsBase || 0) * qty;
@@ -161,32 +188,36 @@ function PosPage() {
         saleItems.reduce((acc, item) => acc + Number(item.total || 0), 0).toFixed(2)
       );
 
-      const saleRef = await addDoc(userCollection("sales"), {
+      const saleRef = doc(userCollection("sales"));
+      batch.set(saleRef, {
         date: serverTimestamp(),
         total: totalSale,
         paymentMethod,
+        receivedCash: paymentMethod === "cash" ? Number(receivedCash || 0) : null,
+        change: paymentMethod === "cash" ? changeAmount : null,
         items: saleItems,
       });
 
       const movementItems = [];
+      const historyTasks = [];
       for (const item of saleItems) {
         const product = productById[item.productId];
         const stockAnterior = Number(getStockBaseValue(product) || 0);
         const stockNuevo = Number((stockAnterior - Number(item.unidades || 0)).toFixed(4));
 
-        await updateDoc(userDoc("products", item.productId), {
+        batch.update(userDoc("products", item.productId), {
           stockBase: increment(-Number(item.unidades || 0)),
           stockActual: increment(-Number(item.unidades || 0)),
           ultimaActualizacion: serverTimestamp(),
         });
 
-        await registerInventoryChange({
+        historyTasks.push(registerInventoryChange({
           product,
           tipoMovimiento: "venta_pos",
           stockAnterior,
           stockNuevo,
           referenciaId: saleRef.id,
-        });
+        }));
 
         movementItems.push({
           productDocId: item.productId,
@@ -200,9 +231,27 @@ function PosPage() {
           priceUnit: item.priceUnit,
           total: item.total,
         });
+
+        const inventoryMovementRef = doc(userCollection("inventory_movements"));
+        batch.set(inventoryMovementRef, {
+          productId: item.productId,
+          productoId: item.productoId,
+          type: "salida",
+          tipoMovimiento: "salida_venta",
+          cantidadBase: Number(item.cantidadBase || 0),
+          unidades: Number(item.unidades || 0),
+          medidaBase: item.medidaBase,
+          referenceId: saleRef.id,
+          source: "pos",
+          priceUnit: Number(item.priceUnit || 0),
+          total: Number(item.total || 0),
+          variant: item.variant || null,
+          createdAt: serverTimestamp(),
+        });
       }
 
-      await addDoc(userCollection("movimientos"), {
+      const movimientoRef = doc(userCollection("movimientos"));
+      batch.set(movimientoRef, {
         type: "salida",
         createdAt: serverTimestamp(),
         saleId: saleRef.id,
@@ -210,6 +259,13 @@ function PosPage() {
         total: totalSale,
         items: movementItems,
       });
+      await batch.commit();
+
+      const historyResults = await Promise.allSettled(historyTasks);
+      const hasHistoryErrors = historyResults.some((result) => result.status === "rejected");
+      if (hasHistoryErrors) {
+        console.error("Errores en historial de cambios de POS", { historyResults });
+      }
 
       setProducts((prev) =>
         prev.map((product) => {
@@ -227,7 +283,13 @@ function PosPage() {
         })
       );
       setCart([]);
-      toast.success("Venta guardada correctamente");
+      setReceivedCash("");
+      setShowPaymentModal(false);
+      toast.success(
+        hasHistoryErrors
+          ? "Venta guardada (con tareas secundarias pendientes)"
+          : "Venta guardada correctamente"
+      );
     } catch (error) {
       console.error(error);
       toast.error("Error guardando venta");
@@ -236,12 +298,23 @@ function PosPage() {
     }
   };
 
+  const handleOpenPaymentModal = () => {
+    if (cart.length === 0) {
+      toast.error("El carrito esta vacio");
+      return;
+    }
+    setShowPaymentModal(true);
+  };
+
   return (
     <div className="section-card">
       <h3 className="section-title">POS</h3>
-      <div className="row">
+      <div className="row search-container" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <span>🔍</span>
         <input
-          className="input-modern buscador"
+          ref={searchInputRef}
+          className="input-modern buscador search-input"
+          style={{ flex: 1, minWidth: "220px", background: "#fff" }}
           placeholder="Buscar producto..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -259,8 +332,11 @@ function PosPage() {
       <div className="spacer" />
       <h3 className="section-title">Resultados</h3>
 
-      <div className="pedido-list">
-        {visibleProducts.map((product) => (
+      {search.trim() === "" ? (
+        <p>Buscar producto o escanear codigo.</p>
+      ) : (
+        <div className="pedido-list">
+          {visibleProducts.map((product) => (
           <div
             key={product.id}
             className="pedido-card"
@@ -315,8 +391,10 @@ function PosPage() {
               ))}
             </div>
           </div>
-        ))}
-      </div>
+          ))}
+          {visibleProducts.length === 0 && <p>No se encontraron productos.</p>}
+        </div>
+      )}
 
       <div className="spacer" />
       <h3 className="section-title">Carrito</h3>
@@ -384,11 +462,62 @@ function PosPage() {
       <button
         type="button"
         className="btn-primary btn-full"
-        onClick={handleSaveSale}
+        onClick={handleOpenPaymentModal}
         disabled={isSaving || cart.length === 0}
       >
         {isSaving ? "Guardando venta..." : "Guardar venta"}
       </button>
+
+      {showPaymentModal && (
+        <div className="modal-overlay" onClick={() => setShowPaymentModal(false)}>
+          <div className="modal modal-compact" onClick={(e) => e.stopPropagation()}>
+            <h3>Guardar venta</h3>
+            <p>
+              Total: <strong>C${Number(total || 0).toFixed(2)}</strong>
+            </p>
+            <p>Metodo de pago: {paymentMethod === "cash" ? "Efectivo" : paymentMethod}</p>
+            {paymentMethod === "cash" && (
+              <>
+                <div className="input-group">
+                  <label>Pago del cliente (C$)</label>
+                  <input
+                    ref={cashInputRef}
+                    className="input-modern"
+                    type="number"
+                    value={receivedCash}
+                    onChange={(e) => setReceivedCash(e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+                <p>
+                  Cambio:{" "}
+                  <strong style={{ color: changeAmount < 0 ? "#dc2626" : "#16a34a" }}>
+                    C${changeAmount.toFixed(2)}
+                  </strong>
+                </p>
+              </>
+            )}
+            <div className="modal-buttons">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowPaymentModal(false)}
+                disabled={isSaving}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleSaveSale}
+                disabled={isSaving}
+              >
+                {isSaving ? "Guardando..." : "Confirmar venta"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
