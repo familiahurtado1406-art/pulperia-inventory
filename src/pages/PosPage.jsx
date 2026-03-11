@@ -94,6 +94,14 @@ function PosPage() {
     );
   };
 
+  const updatePrice = (key, nextPrice) => {
+    setCart((prev) =>
+      prev.map((item) =>
+        item.key === key ? { ...item, price: Math.max(0, Number(nextPrice || 0)) } : item
+      )
+    );
+  };
+
   const removeItem = (key) => {
     setCart((prev) => prev.filter((item) => item.key !== key));
   };
@@ -253,7 +261,20 @@ function PosPage() {
 
       <div className="pedido-list">
         {visibleProducts.map((product) => (
-          <div key={product.id} className="pedido-card">
+          <div
+            key={product.id}
+            className="pedido-card"
+            role="button"
+            tabIndex={0}
+            onClick={() => addToCart(product, getDefaultVariant(product))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                addToCart(product, getDefaultVariant(product));
+              }
+            }}
+            style={{ cursor: "pointer" }}
+          >
             <div className="pedido-card-header">
               <h4>{product.nombre}</h4>
               <span className="precio-unitario">
@@ -270,9 +291,12 @@ function PosPage() {
               <button
                 type="button"
                 className="btn-primary"
-                onClick={() => addToCart(product, getDefaultVariant(product))}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  addToCart(product, getDefaultVariant(product));
+                }}
               >
-                + Agregar
+                +
               </button>
             </div>
             <div className="pedido-quick-actions">
@@ -281,7 +305,10 @@ function PosPage() {
                   key={`${product.id}-${variant.id || variant.name || index}`}
                   type="button"
                   className="btn-secondary"
-                  onClick={() => addToCart(product, variant)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    addToCart(product, variant);
+                  }}
                 >
                   {variant.name} - C${Number(variant.price || 0).toFixed(2)}
                 </button>
@@ -296,60 +323,55 @@ function PosPage() {
       {cart.length === 0 ? (
         <p>No hay productos en el carrito.</p>
       ) : (
-        <div className="table-scroll">
-          <table className="table-modern">
-            <thead>
-              <tr>
-                <th>Producto</th>
-                <th>Presentacion</th>
-                <th>Cantidad</th>
-                <th>Precio</th>
-                <th>Subtotal</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {cart.map((item) => {
-                const subtotal = Number(item.price || 0) * Number(item.qty || 0);
-                return (
-                  <tr key={item.key}>
-                    <td>{item.name}</td>
-                    <td>
-                      {item.variantName} ({Number(item.unitsBase || 0)} {item.medidaBase || "UN"})
-                    </td>
-                    <td>{item.qty}</td>
-                    <td>C${Number(item.price || 0).toFixed(2)}</td>
-                    <td>C${subtotal.toFixed(2)}</td>
-                    <td>
-                      <div style={{ display: "flex", gap: "8px" }}>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => updateQty(item.key, Number(item.qty || 0) - 1)}
-                        >
-                          -1
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => updateQty(item.key, Number(item.qty || 0) + 1)}
-                        >
-                          +1
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => removeItem(item.key)}
-                        >
-                          Eliminar
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="pedido-list">
+          {cart.map((item) => {
+            const subtotal = Number(item.price || 0) * Number(item.qty || 0);
+            return (
+              <div key={item.key} className="pedido-card">
+                <div className="pedido-card-header">
+                  <h4>{item.name}</h4>
+                  <span className="precio-unitario">
+                    {item.variantName} ({Number(item.unitsBase || 0)} {item.medidaBase || "UN"})
+                  </span>
+                </div>
+                <div
+                  className="row"
+                  style={{ alignItems: "center", gap: "8px", flexWrap: "nowrap" }}
+                >
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => updateQty(item.key, Number(item.qty || 0) - 1)}
+                  >
+                    -
+                  </button>
+                  <strong style={{ minWidth: "24px", textAlign: "center" }}>{item.qty}</strong>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => updateQty(item.key, Number(item.qty || 0) + 1)}
+                  >
+                    +
+                  </button>
+                  <input
+                    className="input-modern"
+                    style={{ maxWidth: "110px" }}
+                    type="number"
+                    value={Number(item.price || 0)}
+                    onChange={(e) => updatePrice(item.key, e.target.value)}
+                  />
+                  <strong style={{ marginLeft: "auto" }}>C${subtotal.toFixed(2)}</strong>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => removeItem(item.key)}
+                  >
+                    X
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
