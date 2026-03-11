@@ -2,6 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import { getDocs } from "firebase/firestore";
 import { getInventoryMovementAnalytics } from "../services/analyticsService";
+import { readLocalCache, writeLocalCache } from "../services/localCacheService";
 import { userCollection } from "../services/userScopedFirestore";
 
 const toDayNumber = (date = new Date()) => {
@@ -40,6 +41,8 @@ const dayDistance = (fromDay, toDay) => {
 };
 
 function Dashboard() {
+  const DASHBOARD_CACHE_KEY = "dashboard_overview";
+  const DASHBOARD_CACHE_TTL = 2 * 60 * 1000;
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState(null);
@@ -47,21 +50,37 @@ function Dashboard() {
 
   useEffect(() => {
     const load = async () => {
+      const cached = readLocalCache(DASHBOARD_CACHE_KEY, DASHBOARD_CACHE_TTL);
+      if (cached?.metrics && Array.isArray(cached?.providers)) {
+        setMetrics(cached.metrics);
+        setProviders(cached.providers);
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
       try {
         const [data, providersSnap] = await Promise.all([
           getInventoryMovementAnalytics(30),
           getDocs(userCollection("proveedores")),
         ]);
+        const loadedProviders = providersSnap.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data(),
+        }));
         setMetrics(data);
-        setProviders(providersSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })));
+        setProviders(loadedProviders);
+        writeLocalCache(DASHBOARD_CACHE_KEY, {
+          metrics: data,
+          providers: loadedProviders,
+        });
       } finally {
         setLoading(false);
       }
     };
 
     load();
-  }, []);
+  }, [DASHBOARD_CACHE_KEY, DASHBOARD_CACHE_TTL]);
 
   if (loading) {
     return (
@@ -297,3 +316,6 @@ function Dashboard() {
 }
 
 export default Dashboard;
+
+
+

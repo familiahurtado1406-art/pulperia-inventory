@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   doc,
@@ -11,6 +11,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { getStockBaseValue, registerInventoryChange } from "../services/inventoryHistoryService";
+import { readLocalCache, writeLocalCache } from "../services/localCacheService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 const getDefaultVariant = (product) => {
@@ -32,6 +33,8 @@ const getProductVariants = (product) => {
 };
 
 function PosPage() {
+  const POS_PRODUCTS_CACHE_KEY = "pos_products_active";
+  const POS_PRODUCTS_CACHE_TTL = 3 * 60 * 1000;
   const searchInputRef = useRef(null);
   const cashInputRef = useRef(null);
   const [products, setProducts] = useState([]);
@@ -41,14 +44,39 @@ function PosPage() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [receivedCash, setReceivedCash] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isRefreshingProducts, setIsRefreshingProducts] = useState(false);
+
+  const loadProducts = useCallback(async ({ forceRefresh = false } = {}) => {
+    if (!forceRefresh) {
+      const cachedProducts = readLocalCache(POS_PRODUCTS_CACHE_KEY, POS_PRODUCTS_CACHE_TTL);
+      if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
+        setProducts(cachedProducts);
+        return;
+      }
+    }
+
+    const snapshot = await getDocs(query(userCollection("products"), where("activo", "==", true)));
+    const loadedProducts = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+    setProducts(loadedProducts);
+    writeLocalCache(POS_PRODUCTS_CACHE_KEY, loadedProducts);
+  }, [POS_PRODUCTS_CACHE_KEY, POS_PRODUCTS_CACHE_TTL]);
 
   useEffect(() => {
-    const load = async () => {
-      const snapshot = await getDocs(query(userCollection("products"), where("activo", "==", true)));
-      setProducts(snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })));
-    };
-    load();
-  }, []);
+    loadProducts();
+  }, [loadProducts]);
+
+  const handleRefreshProducts = async () => {
+    setIsRefreshingProducts(true);
+    try {
+      await loadProducts({ forceRefresh: true });
+      toast.success("Productos actualizados");
+    } catch (error) {
+      console.error(error);
+      toast.error("No se pudieron actualizar productos");
+    } finally {
+      setIsRefreshingProducts(false);
+    }
+  };
 
   const visibleProducts = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -319,6 +347,14 @@ function PosPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={handleRefreshProducts}
+          disabled={isRefreshingProducts}
+        >
+          {isRefreshingProducts ? "..." : "Refresh"}
+        </button>
         <select
           className="input-modern"
           value={paymentMethod}
