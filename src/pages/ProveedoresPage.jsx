@@ -8,6 +8,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import AppLayout from "../components/AppLayout";
+import useOverlayBack from "../hooks/useOverlayBack";
 import { confirmToast } from "../services/confirmToast";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 
@@ -25,12 +26,10 @@ const DAY_BY_NAME = {
   lunes: 1,
   martes: 2,
   miercoles: 3,
-  miércoles: 3,
-  jueves: 4,
+    jueves: 4,
   viernes: 5,
   sabado: 6,
-  sábado: 6,
-  domingo: 7,
+    domingo: 7,
 };
 
 const normalizeDay = (value, fallback = 1) => {
@@ -72,6 +71,11 @@ function ProveedoresPage() {
   const [detalleProveedor, setDetalleProveedor] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const closeProveedorForm = useOverlayBack(
+    openForm,
+    () => setOpenForm(false),
+    "proveedores-form"
+  );
 
   const loadProveedores = async () => {
     const snapshot = await getDocs(userCollection("proveedores"));
@@ -167,7 +171,7 @@ function ProveedoresPage() {
 
       toast.success("Proveedor guardado correctamente");
       resetForm();
-      setOpenForm(false);
+      closeProveedorForm();
       const data = await loadProveedores();
       setProveedores(data);
     } catch (error) {
@@ -227,7 +231,7 @@ function ProveedoresPage() {
 
       if (editingProveedor?.id === id) {
         resetForm();
-        setOpenForm(false);
+        closeProveedorForm();
       }
 
       const data = await loadProveedores();
@@ -311,7 +315,7 @@ function ProveedoresPage() {
       </div>
 
       {openForm && (
-        <div className="modal-overlay" onClick={() => setOpenForm(false)}>
+        <div className="modal-overlay" onClick={closeProveedorForm}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>{editingProveedor ? "Editar Proveedor" : "Nuevo Proveedor"}</h3>
 
@@ -454,7 +458,7 @@ function ProveedoresPage() {
                   type="button"
                   className="btn-secondary"
                   onClick={() => {
-                    setOpenForm(false);
+                    closeProveedorForm();
                     resetForm();
                   }}
                 >

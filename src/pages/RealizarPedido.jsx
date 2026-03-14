@@ -342,6 +342,9 @@ function RealizarPedido() {
           sugeridoPack,
           pedidoPack,
           medidaBase: p.medidaBase || "UN",
+          medidaInterna: p.medidaInterna || null,
+          unidadesPorInterna: unidadesPorInterna > 0 ? unidadesPorInterna : null,
+          unidadesPorPack: unidadesPorInterna > 0 ? unidadesPorInterna : null,
           costoUnitarioBase,
           costoTotal,
         };

@@ -14,6 +14,7 @@ import AppLayout from "../components/AppLayout";
 import ProductCard from "../components/ProductCard";
 import SeccionDistribuidores from "../components/SeccionDistribuidores";
 import SkeletonCard from "../components/SkeletonCard";
+import useOverlayBack from "../hooks/useOverlayBack";
 import { confirmToast } from "../services/confirmToast";
 import { upsertProviderProductLink } from "../services/providerProductService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
@@ -93,6 +94,12 @@ function Products() {
   const [draftSortBy, setDraftSortBy] = useState("name");
   const [draftProviderFilter, setDraftProviderFilter] = useState("all");
   const [draftRotationFilter, setDraftRotationFilter] = useState("all");
+  const closeProductForm = useOverlayBack(openForm, () => setOpenForm(false), "products-form");
+  const closeVariantModal = useOverlayBack(
+    showVariantModal,
+    () => setShowVariantModal(false),
+    "products-variant"
+  );
 
   const precioVentaCalculado = useMemo(() => {
     const costo = Number(costoUnitario);
@@ -291,7 +298,7 @@ function Products() {
         barcode: variantBarcode.trim() || null,
       },
     ]);
-    setShowVariantModal(false);
+    closeVariantModal();
     resetVariantForm();
   };
 
@@ -352,7 +359,7 @@ function Products() {
     setMargen("20");
     setPrecioVentaManual("");
     setVariants([]);
-    setShowVariantModal(false);
+    closeVariantModal();
     resetVariantForm();
     setSearchTerm("");
     setSuggestions([]);
@@ -456,7 +463,7 @@ function Products() {
 
       await fetchProducts();
       clearForm();
-      setOpenForm(false);
+      closeProductForm();
       toast.success(editingProduct ? "Producto actualizado" : "Producto creado");
     } catch (error) {
       console.error(error);
@@ -576,14 +583,14 @@ function Products() {
       )}
 
       {openForm && (
-        <div className="modal-overlay" onClick={() => setOpenForm(false)}>
+        <div className="modal-overlay" onClick={closeProductForm}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{editingProduct ? "Editar producto" : "Nuevo producto"}</h3>
                     <button
                 type="button"
                 className="modal-close"
-                onClick={() => setOpenForm(false)}
+                onClick={closeProductForm}
               >
                 Cerrar
               </button>
@@ -986,7 +993,7 @@ function Products() {
       )}
 
       {showVariantModal && (
-        <div className="modal-overlay" onClick={() => setShowVariantModal(false)}>
+        <div className="modal-overlay" onClick={closeVariantModal}>
           <div className="modal modal-compact" onClick={(e) => e.stopPropagation()}>
             <h3>Agregar presentacion</h3>
             <div className="input-group">
@@ -1044,7 +1051,7 @@ function Products() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => {
-                  setShowVariantModal(false);
+                  closeVariantModal();
                   resetVariantForm();
                 }}
               >

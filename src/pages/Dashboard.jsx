@@ -193,7 +193,7 @@ function Dashboard() {
             </span>
           </button>
 
-          <button type="button" className="dashboard-card" onClick={() => navigate("/proveedores")}>
+          <button type="button" className="dashboard-card" onClick={() => navigate("/entregas-hoy")}>
             <div>📦 Entregas hoy</div>
             <h2>{entregasHoy.length}</h2>
             <span className={`badge-rotacion ${entregasHoy.length > 0 ? "alta" : "media"}`}>

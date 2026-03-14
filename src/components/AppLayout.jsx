@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
+import { FaHome } from "react-icons/fa";
 import { Link, useNavigate } from "react-router-dom";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "../firebase/config";
@@ -41,6 +42,16 @@ export default function AppLayout({ title, children, onAdd, onRefresh }) {
         </button>
         <h1>{title}</h1>
         <div className="header-actions">
+          <button
+            type="button"
+            className="refresh-btn"
+            onClick={() => navigate("/pos")}
+            aria-label="Ir a inicio"
+            title="Ir a inicio"
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+          >
+            <FaHome size={16} />
+          </button>
           {onRefresh && (
             <button type="button" className="refresh-btn" onClick={onRefresh}>
               Refresh

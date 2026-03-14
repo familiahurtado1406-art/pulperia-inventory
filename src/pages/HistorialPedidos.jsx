@@ -4,6 +4,7 @@ import {
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
+import { FaBoxes, FaChartBar, FaBoxOpen } from "react-icons/fa";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 const formatDate = (value) => {
@@ -22,8 +23,13 @@ const getUnidadesPorInterna = (prod) =>
 const formatCantidadPedido = (prod) => {
   const cantidadBase = getCantidadBase(prod);
   const medidaBase = prod.medidaBase || prod.unidad || "UN";
-  const medidaInterna = prod.medidaInterna || null;
+  const medidaInterna = prod.medidaInterna || prod.unidadInterna || null;
   const factorInterna = getUnidadesPorInterna(prod);
+
+  if ((!medidaInterna || factorInterna <= 0) && Number(prod.pedidoPack || 0) > 0) {
+    const fallbackInterna = prod.medidaInterna || prod.unidadInterna || "PACK";
+    return `${cantidadBase.toFixed(2)} ${medidaBase} (${Number(prod.pedidoPack || 0).toFixed(2)} ${fallbackInterna})`;
+  }
 
   if (!medidaInterna || factorInterna <= 0) {
     return `${cantidadBase.toFixed(2)} ${medidaBase}`;
@@ -34,14 +40,14 @@ const formatCantidadPedido = (prod) => {
   const restoBase = Number((cantidadBase - internaEntera * factorInterna).toFixed(2));
 
   if (Math.abs(restoBase) < 0.001) {
-    return `${internaEntera} ${medidaInterna} (${cantidadBase.toFixed(2)} ${medidaBase})`;
+    return `${cantidadBase.toFixed(2)} ${medidaBase} (${internaEntera} ${medidaInterna})`;
   }
 
   if (internaEntera > 0) {
-    return `${internaEntera} ${medidaInterna} + ${restoBase.toFixed(2)} ${medidaBase} (${cantidadBase.toFixed(2)} ${medidaBase})`;
+    return `${cantidadBase.toFixed(2)} ${medidaBase} (${internaEntera} ${medidaInterna} + ${restoBase.toFixed(2)} ${medidaBase})`;
   }
 
-  return `${cantidadInterna.toFixed(2)} ${medidaInterna} (${cantidadBase.toFixed(2)} ${medidaBase})`;
+  return `${cantidadBase.toFixed(2)} ${medidaBase} (${cantidadInterna.toFixed(2)} ${medidaInterna})`;
 };
 
 const getPedidoResumen = (pedido) => {
@@ -134,7 +140,7 @@ function HistorialPedidos() {
   const getPedidoWhatsappText = (pedido) => {
     const resumen = getPedidoResumen(pedido);
     const lineasProductos = (pedido.productos || [])
-      .map((prod) => `• ${prod.nombre}\n  ${formatCantidadPedido(prod)}`)
+      .map((prod) => `- ${prod.nombre}\n  ${formatCantidadPedido(prod)}`)
       .join("\n\n");
 
     return [
@@ -239,9 +245,18 @@ function HistorialPedidos() {
                   const resumen = getPedidoResumen(pedido);
                   return (
                     <div className="pedido-detail-item">
-                      <p>📦 Total productos: {resumen.totalProductos}</p>
-                      <p>📊 Total unidades: {resumen.totalUnidades.toFixed(2)} UN</p>
-                      <p>📦 Total internas (equivalente): {resumen.totalInternas.toFixed(2)}</p>
+                      <p style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <FaBoxes color="#2563eb" />
+                        <span>Total productos: {resumen.totalProductos}</span>
+                      </p>
+                      <p style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <FaChartBar color="#16a34a" />
+                        <span>Total unidades: {resumen.totalUnidades.toFixed(2)} UN</span>
+                      </p>
+                      <p style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <FaBoxOpen color="#f59e0b" />
+                        <span>Total internas (equivalente): {resumen.totalInternas.toFixed(2)}</span>
+                      </p>
                     </div>
                   );
                 })()}

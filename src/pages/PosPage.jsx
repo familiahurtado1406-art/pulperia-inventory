@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   doc,
@@ -10,6 +10,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "../firebase/config";
+import useOverlayBack from "../hooks/useOverlayBack";
 import { getStockBaseValue, registerInventoryChange } from "../services/inventoryHistoryService";
 import { readLocalCache, writeLocalCache } from "../services/localCacheService";
 import { syncProductMetrics } from "../services/productMetricsService";
@@ -18,6 +19,7 @@ import { userCollection, userDoc } from "../services/userScopedFirestore";
 const POS_PRODUCTS_CACHE_KEY = "pos_products_active";
 const POS_PRODUCTS_CACHE_TTL = 3 * 60 * 1000;
 const QUICK_CASH_AMOUNTS = [1000, 500, 200, 100, 50, 20, 10, 5, 1];
+const MAX_ACTIVE_CARTS = 5;
 
 const getDefaultVariant = (product) => {
   const basePrice = Number(product.precioVentaBase ?? product.precioVenta ?? 0);
@@ -58,12 +60,21 @@ const getQuantityStep = (measure = "UN") => {
   return 1;
 };
 
+const createCartId = () => `cart_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const createEmptyCart = (index = 1) => ({
+  id: createCartId(),
+  label: `C${index}`,
+  items: [],
+});
+
 function PosPage() {
   const searchInputRef = useRef(null);
   const cashInputRef = useRef(null);
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState("");
-  const [cart, setCart] = useState([]);
+  const [carts, setCarts] = useState([createEmptyCart(1)]);
+  const [activeCartId, setActiveCartId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showQuantityModal, setShowQuantityModal] = useState(false);
@@ -75,6 +86,23 @@ function PosPage() {
   const [emitTicket, setEmitTicket] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isRefreshingProducts, setIsRefreshingProducts] = useState(false);
+  const closeSearchOverlay = useOverlayBack(showSearchModal, () => setShowSearchModal(false), "pos-search");
+  const closeQuantityOverlay = useOverlayBack(
+    showQuantityModal,
+    () => {
+      setShowQuantityModal(false);
+      setSelectedProduct(null);
+      setSelectedVariant(null);
+    },
+    "pos-quantity"
+  );
+  const closePaymentOverlay = useOverlayBack(showPaymentModal, () => setShowPaymentModal(false), "pos-payment");
+
+  useEffect(() => {
+    if (!activeCartId && carts.length > 0) {
+      setActiveCartId(carts[0].id);
+    }
+  }, [activeCartId, carts]);
 
   const loadProducts = useCallback(async ({ forceRefresh = false } = {}) => {
     if (!forceRefresh) {
@@ -123,14 +151,20 @@ function PosPage() {
       .slice(0, 6);
   }, [products, search]);
 
+  const activeCart = useMemo(
+    () => carts.find((cart) => cart.id === activeCartId) || carts[0] || createEmptyCart(1),
+    [activeCartId, carts]
+  );
+  const activeCartItems = useMemo(() => activeCart?.items || [], [activeCart]);
+
   const total = useMemo(() => {
     return Number(
-      cart.reduce((acc, item) => acc + Number(item.price || 0) * Number(item.qty || 0), 0).toFixed(2)
+      activeCartItems.reduce((acc, item) => acc + Number(item.price || 0) * Number(item.qty || 0), 0).toFixed(2)
     );
-  }, [cart]);
+  }, [activeCartItems]);
   const cartItemsCount = useMemo(
-    () => cart.reduce((acc, item) => acc + Number(item.qty || 0), 0),
-    [cart]
+    () => activeCartItems.reduce((acc, item) => acc + Number(item.qty || 0), 0),
+    [activeCartItems]
   );
   const changeAmount = useMemo(() => {
     if (paymentMethod !== "cash") return 0;
@@ -153,7 +187,7 @@ function PosPage() {
   }, [showPaymentModal, paymentMethod]);
 
   const closeSearchModal = () => {
-    setShowSearchModal(false);
+    closeSearchOverlay();
     setSearch("");
   };
 
@@ -161,31 +195,40 @@ function PosPage() {
     const qty = Number(qtyOverride || 0);
     if (qty <= 0) return;
     const key = `${product.id}__${variant.id || variant.name}`;
-    setCart((prev) => {
-      const existingIndex = prev.findIndex((item) => item.key === key);
-      if (existingIndex >= 0) {
-        return prev.map((item, index) =>
-          index === existingIndex ? { ...item, qty: Number(item.qty || 0) + qty } : item
-        );
-      }
-      return [
-        ...prev,
-        {
-          key,
-          productId: product.id,
-          productoId: product.productoId || product.id,
-          name: product.nombre || product.id,
-          variantId: variant.id || "",
-          variantName: variant.name || product.medidaBase || "UN",
-          unitsBase: Number(variant.units || 1),
-          price: Number(variant.price || 0),
-          qty,
-          medidaBase: product.medidaBase || "UN",
-        },
-      ];
-    });
+    setCarts((prev) =>
+      prev.map((cart) => {
+        if (cart.id !== activeCartId) return cart;
+        const existingIndex = cart.items.findIndex((item) => item.key === key);
+        if (existingIndex >= 0) {
+          return {
+            ...cart,
+            items: cart.items.map((item, index) =>
+              index === existingIndex ? { ...item, qty: Number(item.qty || 0) + qty } : item
+            ),
+          };
+        }
+        return {
+          ...cart,
+          items: [
+            ...cart.items,
+            {
+              key,
+              productId: product.id,
+              productoId: product.productoId || product.id,
+              name: product.nombre || product.id,
+              variantId: variant.id || "",
+              variantName: variant.name || product.medidaBase || "UN",
+              unitsBase: Number(variant.units || 1),
+              price: Number(variant.price || 0),
+              qty,
+              medidaBase: product.medidaBase || "UN",
+            },
+          ],
+        };
+      })
+    );
     setSearch("");
-    setShowSearchModal(false);
+    closeSearchOverlay();
     toast.success("Producto agregado");
   };
 
@@ -212,33 +255,79 @@ function PosPage() {
   const handleConfirmVariableQuantity = () => {
     if (!selectedProduct || !selectedVariant) return;
     addToCart(selectedProduct, selectedVariant, quantityValue);
-    setShowQuantityModal(false);
-    setSelectedProduct(null);
-    setSelectedVariant(null);
+    closeQuantityOverlay();
   };
 
   const updateQty = (key, nextQty) => {
-    setCart((prev) =>
-      prev
-        .map((item) => (item.key === key ? { ...item, qty: Math.max(0, Number(nextQty || 0)) } : item))
-        .filter((item) => Number(item.qty || 0) > 0)
+    setCarts((prev) =>
+      prev.map((cart) =>
+        cart.id !== activeCartId
+          ? cart
+          : {
+              ...cart,
+              items: cart.items
+                .map((item) =>
+                  item.key === key ? { ...item, qty: Math.max(0, Number(nextQty || 0)) } : item
+                )
+                .filter((item) => Number(item.qty || 0) > 0),
+            }
+      )
     );
   };
 
   const updatePrice = (key, nextPrice) => {
-    setCart((prev) =>
-      prev.map((item) =>
-        item.key === key ? { ...item, price: Math.max(0, Number(nextPrice || 0)) } : item
+    setCarts((prev) =>
+      prev.map((cart) =>
+        cart.id !== activeCartId
+          ? cart
+          : {
+              ...cart,
+              items: cart.items.map((item) =>
+                item.key === key ? { ...item, price: Math.max(0, Number(nextPrice || 0)) } : item
+              ),
+            }
       )
     );
   };
 
   const removeItem = (key) => {
-    setCart((prev) => prev.filter((item) => item.key !== key));
+    setCarts((prev) =>
+      prev.map((cart) =>
+        cart.id !== activeCartId
+          ? cart
+          : {
+              ...cart,
+              items: cart.items.filter((item) => item.key !== key),
+            }
+      )
+    );
+  };
+
+  const handleCreateCart = () => {
+    if (carts.length >= MAX_ACTIVE_CARTS) {
+      toast("Maximo 5 carritos activos");
+      return;
+    }
+    const newCart = createEmptyCart(carts.length + 1);
+    setCarts((prev) => [...prev, newCart]);
+    setActiveCartId(newCart.id);
+  };
+
+  const clearActiveCart = () => {
+    setCarts((prev) =>
+      prev.map((cart) =>
+        cart.id === activeCartId
+          ? {
+              ...cart,
+              items: [],
+            }
+          : cart
+      )
+    );
   };
 
   const handleSaveSale = async () => {
-    if (cart.length === 0) {
+    if (activeCartItems.length === 0) {
       toast.error("El carrito esta vacio");
       return;
     }
@@ -255,7 +344,7 @@ function PosPage() {
       return acc;
     }, {});
 
-    for (const line of cart) {
+    for (const line of activeCartItems) {
       const product = productById[line.productId];
       if (!product) {
         toast.error(`Producto no encontrado: ${line.name}`);
@@ -276,7 +365,7 @@ function PosPage() {
     setIsSaving(true);
     try {
       const batch = writeBatch(db);
-      const saleItems = cart.map((line) => {
+      const saleItems = activeCartItems.map((line) => {
         const qty = Number(line.qty || 0);
         const unitsTotal = Number(line.unitsBase || 0) * qty;
         const totalLine = Number((Number(line.price || 0) * qty).toFixed(2));
@@ -305,6 +394,8 @@ function PosPage() {
         date: serverTimestamp(),
         total: totalSale,
         paymentMethod,
+        cartId: activeCart.id,
+        cartLabel: activeCart.label,
         receivedCash: paymentMethod === "cash" ? Number(receivedCash || 0) : null,
         change: paymentMethod === "cash" ? changeAmount : null,
         emitTicket,
@@ -368,6 +459,8 @@ function PosPage() {
         type: "salida",
         createdAt: serverTimestamp(),
         saleId: saleRef.id,
+        cartId: activeCart.id,
+        cartLabel: activeCart.label,
         paymentMethod,
         total: totalSale,
         items: movementItems,
@@ -400,9 +493,9 @@ function PosPage() {
           };
         })
       );
-      setCart([]);
+      clearActiveCart();
       setReceivedCash("");
-      setShowPaymentModal(false);
+      closePaymentOverlay();
       toast.success("Venta guardada correctamente");
     } catch (error) {
       console.error(error);
@@ -413,7 +506,7 @@ function PosPage() {
   };
 
   const handleOpenPaymentModal = () => {
-    if (cart.length === 0) {
+    if (activeCartItems.length === 0) {
       toast.error("El carrito esta vacio");
       return;
     }
@@ -437,7 +530,7 @@ function PosPage() {
           alignItems: "center",
           marginBottom: "20px",
         }}
-      >
+        >
         <div>
           <h3 className="section-title" style={{ marginBottom: "4px" }}>
             Caja
@@ -451,6 +544,57 @@ function PosPage() {
           disabled={isRefreshingProducts}
         >
           {isRefreshingProducts ? "..." : "Refresh"}
+        </button>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          gap: "10px",
+          overflowX: "auto",
+          paddingBottom: "8px",
+          marginBottom: "18px",
+        }}
+      >
+        {carts.map((cart) => {
+          const isActive = cart.id === activeCartId;
+          const itemCount = cart.items.reduce((acc, item) => acc + Number(item.qty || 0), 0);
+          return (
+            <button
+              key={cart.id}
+              type="button"
+              onClick={() => setActiveCartId(cart.id)}
+              style={{
+                border: isActive ? "1px solid #2563eb" : "1px solid #dbe3ef",
+                background: isActive ? "#eaf2ff" : "#fff",
+                color: isActive ? "#1d4ed8" : "#334155",
+                borderRadius: "16px",
+                minWidth: "88px",
+                padding: "10px 14px",
+                textAlign: "left",
+                boxShadow: isActive ? "0 8px 20px rgba(37, 99, 235, 0.12)" : "none",
+              }}
+            >
+              <div style={{ fontWeight: 700 }}>{cart.label}</div>
+              <div style={{ fontSize: "12px", opacity: 0.8 }}>{itemCount} prod.</div>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={handleCreateCart}
+          style={{
+            border: "1px dashed #93c5fd",
+            background: "#f8fbff",
+            color: "#2563eb",
+            borderRadius: "16px",
+            minWidth: "56px",
+            padding: "10px 14px",
+            fontSize: "22px",
+            fontWeight: 700,
+          }}
+        >
+          +
         </button>
       </div>
 
@@ -495,9 +639,9 @@ function PosPage() {
         </button>
       </div>
 
-      {cart.length > 0 && (
+      {activeCartItems.length > 0 && (
         <div style={{ marginTop: "24px", display: "grid", gap: "12px" }}>
-          {cart.map((item) => {
+          {activeCartItems.map((item) => {
             const subtotal = Number((Number(item.price || 0) * Number(item.qty || 0)).toFixed(2));
             return (
               <div
@@ -623,9 +767,9 @@ function PosPage() {
         >
           <div>
             <div style={{ color: "#6b7280", marginBottom: "4px" }}>
-              {cart.length > 0
+              {activeCartItems.length > 0
                 ? `${cartItemsCount} productos en el carrito`
-                : "Carrito vacio. Escanea o selecciona productos."}
+                : `Carrito ${activeCart.label} vacio. Escanea o selecciona productos.`}
             </div>
             <div style={{ fontSize: "18px", fontWeight: 800, color: "#111827" }}>
               Total: {formatCurrency(total)}
@@ -636,7 +780,7 @@ function PosPage() {
             type="button"
             className="btn-primary"
             onClick={handleOpenPaymentModal}
-            disabled={isSaving || cart.length === 0}
+            disabled={isSaving || activeCartItems.length === 0}
             style={{
               minWidth: "180px",
               minHeight: "56px",
@@ -762,9 +906,7 @@ function PosPage() {
         <div
           className="modal-overlay"
           onClick={() => {
-            setShowQuantityModal(false);
-            setSelectedProduct(null);
-            setSelectedVariant(null);
+            closeQuantityOverlay();
           }}
         >
           <div
@@ -784,9 +926,7 @@ function PosPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setShowQuantityModal(false);
-                  setSelectedProduct(null);
-                  setSelectedVariant(null);
+                  closeQuantityOverlay();
                 }}
                 style={{
                   border: "none",
@@ -928,9 +1068,7 @@ function PosPage() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => {
-                  setShowQuantityModal(false);
-                  setSelectedProduct(null);
-                  setSelectedVariant(null);
+                  closeQuantityOverlay();
                 }}
               >
                 Cancelar
@@ -944,7 +1082,7 @@ function PosPage() {
       )}
 
       {showPaymentModal && (
-        <div className="modal-overlay" onClick={() => setShowPaymentModal(false)}>
+        <div className="modal-overlay" onClick={closePaymentOverlay}>
           <div
             className="modal"
             onClick={(e) => e.stopPropagation()}
@@ -961,7 +1099,7 @@ function PosPage() {
               <h3 style={{ margin: 0 }}>Confirmar Venta</h3>
               <button
                 type="button"
-                onClick={() => setShowPaymentModal(false)}
+                onClick={closePaymentOverlay}
                 style={{
                   border: "none",
                   background: "#f3f4f6",
@@ -986,7 +1124,7 @@ function PosPage() {
               }}
             >
               <span>{cartItemsCount} productos en el carrito</span>
-              <button type="button" className="btn-secondary" onClick={() => setShowPaymentModal(false)}>
+              <button type="button" className="btn-secondary" onClick={closePaymentOverlay}>
                 Ver articulos
               </button>
             </div>

@@ -12,6 +12,7 @@ import HistorialCambios from "./pages/HistorialCambios";
 import InventoryInsightsPage from "./pages/InventoryInsightsPage";
 import ProductoDetalles from "./pages/ProductoDetalles";
 import PedidosHoyPage from "./pages/PedidosHoyPage";
+import EntregasHoyPage from "./pages/EntregasHoyPage";
 import PosPage from "./pages/PosPage";
 import Login from "./pages/Login";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -105,6 +106,16 @@ function App() {
               <ProtectedRoute>
                 <AppLayout title="Pedidos de hoy">
                   <PedidosHoyPage />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/entregas-hoy"
+            element={
+              <ProtectedRoute>
+                <AppLayout title="Entregas de hoy">
+                  <EntregasHoyPage />
                 </AppLayout>
               </ProtectedRoute>
             }

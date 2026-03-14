@@ -1,35 +1,12 @@
-import { useRef } from "react";
-
-export default function ProductCard({ producto, onEdit, onDelete, onDetails }) {
-  const touchStartX = useRef(null);
-
+export default function ProductCard({ producto, onEdit, onDetails }) {
   const stockBase = Number(
     producto.stockBase ?? producto.stockUnidades ?? producto.stockActual ?? 0
   );
   const stockMin = Number(producto.stockMin || 0);
   const bajoStock = stockBase <= stockMin;
 
-  const handleTouchStart = (event) => {
-    touchStartX.current = event.changedTouches[0]?.clientX ?? null;
-  };
-
-  const handleTouchEnd = (event) => {
-    if (!onDelete || touchStartX.current === null) return;
-    const endX = event.changedTouches[0]?.clientX ?? touchStartX.current;
-    const deltaX = endX - touchStartX.current;
-    touchStartX.current = null;
-
-    if (deltaX < -70) {
-      onDelete(producto.id);
-    }
-  };
-
   return (
-    <div
-      className="product-card"
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
-    >
+    <div className="product-card">
       <div className="product-left">
         <div className="product-image" aria-hidden>
           BOX
