@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import { getDocs } from "firebase/firestore";
 import {
   deactivateProviderProductLink,
@@ -6,6 +7,7 @@ import {
   setPreferredProviderProductLink,
   upsertProviderProductLink,
 } from "../services/providerProductService";
+import { confirmToast } from "../services/confirmToast";
 import { userCollection } from "../services/userScopedFirestore";
 
 function SeccionDistribuidores({
@@ -20,6 +22,8 @@ function SeccionDistribuidores({
   const [proveedores, setProveedores] = useState([]);
   const [openModal, setOpenModal] = useState(false);
   const [selectedProveedorId, setSelectedProveedorId] = useState("");
+  const [proveedorSearch, setProveedorSearch] = useState("");
+  const [showProveedorSuggestions, setShowProveedorSuggestions] = useState(false);
   const [costoUnitario, setCostoUnitario] = useState("");
   const [costoPack, setCostoPack] = useState("");
   const isDraftMode = !producto?.id;
@@ -45,6 +49,18 @@ function SeccionDistribuidores({
     });
     return map;
   }, [proveedores]);
+
+  const proveedoresFiltrados = useMemo(() => {
+    const usados = new Set(relacionesVisibles.map((r) => String(r.proveedorId || "")));
+    const disponibles = proveedores.filter((provider) => !usados.has(String(provider.id)));
+    const term = proveedorSearch.trim().toLowerCase();
+    if (!term) return disponibles.slice(0, 12);
+    return disponibles
+      .filter((provider) =>
+        String(provider.nombre || provider.id || "").toLowerCase().includes(term)
+      )
+      .slice(0, 12);
+  }, [proveedores, proveedorSearch, relacionesVisibles]);
 
   const mejorCosto = useMemo(() => {
     const withCost = relacionesVisibles.filter((item) => Number(item.costoUnitario || 0) > 0);
@@ -109,6 +125,8 @@ function SeccionDistribuidores({
     const usados = new Set(relacionesVisibles.map((r) => String(r.proveedorId || "")));
     const first = proveedores.find((p) => !usados.has(String(p.id)));
     setSelectedProveedorId(first?.id || "");
+    setProveedorSearch(first?.nombre || first?.id || "");
+    setShowProveedorSuggestions(true);
     setCostoUnitario("");
     setCostoPack("");
     setOpenModal(true);
@@ -116,14 +134,14 @@ function SeccionDistribuidores({
 
   const handleGuardar = async () => {
     if (!selectedProveedorId) {
-      alert("Selecciona un distribuidor");
+      toast.error("Selecciona un distribuidor");
       return;
     }
     const costoUnitarioFinal = Number(
       usaCostoUnitarioCalculado ? costoUnitarioCalculado : costoUnitario
     );
     if (costoUnitarioFinal <= 0) {
-      alert("Ingresa un costo unitario valido");
+      toast.error("Ingresa un costo unitario valido");
       return;
     }
 
@@ -166,9 +184,12 @@ function SeccionDistribuidores({
   const handleEliminarRelacion = async (dist) => {
     const providerName =
       dist.proveedorNombre || proveedoresMap[dist.proveedorId] || dist.proveedorId || "Proveedor";
-    const confirmDelete = window.confirm(
-      `${providerName} ya no vende este producto?\n\nEsta accion desvinculara el distribuidor del producto.`
-    );
+    const confirmDelete = await confirmToast({
+      title: "Desvincular distribuidor",
+      description: `${providerName} ya no vende este producto?\n\nEsta accion desvinculara el distribuidor del producto.`,
+      confirmLabel: "Desvincular",
+      confirmTone: "danger",
+    });
     if (!confirmDelete) return;
 
     if (isDraftMode) {
@@ -289,18 +310,46 @@ function SeccionDistribuidores({
 
             <div className="input-group">
               <label>Seleccionar proveedor</label>
-              <select
-                className="input-modern"
-                value={selectedProveedorId}
-                onChange={(e) => setSelectedProveedorId(e.target.value)}
-              >
-                <option value="">Seleccionar proveedor</option>
-                {proveedores.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.nombre}
-                  </option>
-                ))}
-              </select>
+              <div style={{ position: "relative" }}>
+                <input
+                  className="input-modern"
+                  placeholder="Buscar proveedor..."
+                  value={proveedorSearch}
+                  onChange={(e) => {
+                    setProveedorSearch(e.target.value);
+                    setSelectedProveedorId("");
+                    setShowProveedorSuggestions(true);
+                  }}
+                  onFocus={() => setShowProveedorSuggestions(true)}
+                  onClick={(e) => e.target.select()}
+                  onBlur={() => {
+                    setTimeout(() => setShowProveedorSuggestions(false), 150);
+                  }}
+                />
+                {showProveedorSuggestions && (
+                  <div className="suggestions-box" style={{ maxHeight: "220px", overflowY: "auto" }}>
+                    {proveedoresFiltrados.length > 0 ? (
+                      proveedoresFiltrados.map((provider) => (
+                        <button
+                          key={provider.id}
+                          type="button"
+                          className="suggestion-item"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            setSelectedProveedorId(provider.id);
+                            setProveedorSearch(provider.nombre || provider.id);
+                            setShowProveedorSuggestions(false);
+                          }}
+                        >
+                          {provider.nombre || provider.id}
+                        </button>
+                      ))
+                    ) : (
+                      <div className="suggestion-item">No se encontraron proveedores.</div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="input-group">

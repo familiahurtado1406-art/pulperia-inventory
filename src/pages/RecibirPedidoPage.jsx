@@ -18,11 +18,14 @@ import {
   getProviderProductLinksByProvider,
   upsertProviderProductLink,
 } from "../services/providerProductService";
+import { confirmToast } from "../services/confirmToast";
 import { userCollection, userDoc, userSubcollection } from "../services/userScopedFirestore";
 
 function RecibirPedidoPage() {
   const [suppliers, setSuppliers] = useState([]);
   const [selectedSupplier, setSelectedSupplier] = useState("");
+  const [supplierSearch, setSupplierSearch] = useState("");
+  const [showSupplierSuggestions, setShowSupplierSuggestions] = useState(false);
   const [supplierProducts, setSupplierProducts] = useState([]);
   const [providerLinkByProductId, setProviderLinkByProductId] = useState({});
   const [search, setSearch] = useState("");
@@ -43,6 +46,8 @@ function RecibirPedidoPage() {
   const [showPriceConfirmModal, setShowPriceConfirmModal] = useState(false);
   const [pendingItemData, setPendingItemData] = useState(null);
   const [isSavingPedido, setIsSavingPedido] = useState(false);
+  const [showCantidadDetalles, setShowCantidadDetalles] = useState(false);
+  const [showCostoDetalles, setShowCostoDetalles] = useState(false);
   const unidadesPorInternaActual = Number(
     selectedProduct?.unidadesPorInterna ?? selectedProduct?.unidadesPorPack ?? 0
   );
@@ -109,6 +114,16 @@ function RecibirPedidoPage() {
       (p.nombre || "").toLowerCase().includes(search.toLowerCase())
     );
   }, [search, supplierProducts]);
+
+  const filteredSuppliers = useMemo(() => {
+    const term = supplierSearch.trim().toLowerCase();
+    if (!term) return suppliers.slice(0, 12);
+    return suppliers
+      .filter((supplier) =>
+        String(supplier.nombre || supplier.id || "").toLowerCase().includes(term)
+      )
+      .slice(0, 12);
+  }, [supplierSearch, suppliers]);
   const previewCantidadBase = cantidadBaseActual;
   const stockActualSeleccionado = Number(
     selectedProduct ? getStockBaseValue(selectedProduct) : 0
@@ -204,6 +219,10 @@ function RecibirPedidoPage() {
 
   const handleSupplierChange = async (supplierId) => {
     setSelectedSupplier(supplierId);
+    const supplierName =
+      suppliers.find((supplier) => supplier.id === supplierId)?.nombre || supplierId || "";
+    setSupplierSearch(supplierName);
+    setShowSupplierSuggestions(false);
     await loadSupplierProducts(supplierId);
   };
 
@@ -261,6 +280,8 @@ function RecibirPedidoPage() {
     setPrecioEditadoManualmente(false);
     setShowPriceConfirmModal(false);
     setPendingItemData(null);
+    setShowCantidadDetalles(false);
+    setShowCostoDetalles(false);
   };
 
   const upsertReceivedItem = (item) => {
@@ -302,13 +323,20 @@ function RecibirPedidoPage() {
     setPrecioEditadoManualmente(false);
     setShowPriceConfirmModal(false);
     setPendingItemData(null);
+    setShowCantidadDetalles(true);
+    setShowCostoDetalles(true);
     setSearch("");
   };
 
-  const handleRemoveItem = (index) => {
+  const handleRemoveItem = async (index) => {
     const item = receivedItems[index];
     if (!item) return;
-    const confirmed = window.confirm(`Eliminar ${item.nombre} del pedido actual?`);
+    const confirmed = await confirmToast({
+      title: "Eliminar linea",
+      description: `Eliminar ${item.nombre} del pedido actual?`,
+      confirmLabel: "Eliminar",
+      confirmTone: "danger",
+    });
     if (!confirmed) return;
 
     setReceivedItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
@@ -317,6 +345,8 @@ function RecibirPedidoPage() {
       setSelectedProduct(null);
       setPendingItemData(null);
       setShowPriceConfirmModal(false);
+      setShowCantidadDetalles(false);
+      setShowCostoDetalles(false);
     }
   };
 
@@ -376,7 +406,11 @@ function RecibirPedidoPage() {
 
   const finalizeAddItem = ({ updatePrice }) => {
     if (!pendingItemData) return;
-    const finalPrice = updatePrice ? pendingItemData.proposedPrice : Number(precioOriginal || 0);
+    const finalPrice = updatePrice ? Number(pendingItemData.proposedPrice || 0) : Number(precioOriginal || 0);
+    if (updatePrice && finalPrice <= 0) {
+      toast.error("Ingresa un precio nuevo valido");
+      return;
+    }
     const item = buildReceivedItem({
       product: pendingItemData.product,
       cantidadIngresada: pendingItemData.cantidadIngresada,
@@ -398,7 +432,7 @@ function RecibirPedidoPage() {
     setPendingItemData(null);
   };
 
-  const handleAddItem = () => {
+  const handleAddItem = async () => {
     if (!selectedProduct) return;
 
     const cantidadNum = Number(cantidad);
@@ -417,9 +451,11 @@ function RecibirPedidoPage() {
       return;
     }
     if (priceIncreaseInfo) {
-      const confirmed = window.confirm(
-        `El proveedor subio el precio ${priceIncreaseInfo.changePercent}%\nPrecio anterior: C$${priceIncreaseInfo.prev.toFixed(2)}\nPrecio nuevo: C$${priceIncreaseInfo.next.toFixed(2)}\n\nDeseas continuar?`
-      );
+      const confirmed = await confirmToast({
+        title: "Subida de precio detectada",
+        description: `El proveedor subio el precio ${priceIncreaseInfo.changePercent}%\nPrecio anterior: C$${priceIncreaseInfo.prev.toFixed(2)}\nPrecio nuevo: C$${priceIncreaseInfo.next.toFixed(2)}`,
+        confirmLabel: "Continuar",
+      });
       if (!confirmed) return;
     }
 
@@ -631,18 +667,44 @@ function RecibirPedidoPage() {
       <div className="section-card">
         <h3 className="section-title">Recibir Pedido</h3>
         <div className="row">
-          <select
-            className="input-modern proveedor-select"
-            value={selectedSupplier}
-            onChange={(e) => handleSupplierChange(e.target.value)}
-          >
-            <option value="">Seleccionar proveedor</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.nombre || s.id}
-              </option>
-            ))}
-          </select>
+          <div style={{ position: "relative", flex: 1 }}>
+            <input
+              className="input-modern proveedor-select"
+              placeholder="Buscar proveedor..."
+              value={supplierSearch}
+              onChange={(e) => {
+                setSupplierSearch(e.target.value);
+                setShowSupplierSuggestions(true);
+                setSelectedSupplier("");
+                setSupplierProducts([]);
+                setProviderLinkByProductId({});
+              }}
+              onFocus={() => setShowSupplierSuggestions(true)}
+              onClick={(e) => e.target.select()}
+              onBlur={() => {
+                setTimeout(() => setShowSupplierSuggestions(false), 150);
+              }}
+            />
+            {showSupplierSuggestions && (
+              <div className="suggestions-box" style={{ maxHeight: "220px", overflowY: "auto" }}>
+                {filteredSuppliers.length > 0 ? (
+                  filteredSuppliers.map((supplier) => (
+                    <button
+                      key={supplier.id}
+                      type="button"
+                      className="suggestion-item"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => handleSupplierChange(supplier.id)}
+                    >
+                      {supplier.nombre || supplier.id}
+                    </button>
+                  ))
+                ) : (
+                  <div className="suggestion-item">No se encontraron proveedores.</div>
+                )}
+              </div>
+            )}
+          </div>
 
           <input
             className="input-modern buscador"
@@ -760,42 +822,43 @@ function RecibirPedidoPage() {
             </div>
 
             <div className="input-group">
-              <label htmlFor="cantidad-base-adicional">UN adicionales</label>
-              <input
-                id="cantidad-base-adicional"
-                className="input-modern"
-                type="number"
-                value={cantidadBaseAdicional}
-                min="0"
-                step="1"
-                onChange={(e) => handleCantidadExtraChange(e.target.value)}
-              />
-              <small>Opcional. Se suma al equivalente base.</small>
-            </div>
-            <div className="input-group">
-              <label htmlFor="cantidad-recibida-automatica">Cantidad recibida (automatica)</label>
-              <input
-                id="cantidad-recibida-automatica"
-                className="input-modern"
-                type="number"
-                value={Number(previewCantidadBase || 0)}
-                readOnly
-              />
-              <small>Calculada automaticamente en unidades base.</small>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowCantidadDetalles((prev) => !prev)}
+              >
+                {showCantidadDetalles ? "Ocultar detalles de cantidad ^" : "Ver detalles de cantidad v"}
+              </button>
             </div>
 
-            <div className="input-group">
-              <label htmlFor="tipo-impuesto">Impuesto</label>
-              <select
-                id="tipo-impuesto"
-                className="input-modern"
-                value={tipoImpuesto}
-                onChange={(e) => setTipoImpuesto(e.target.value)}
-              >
-                <option value="NO_IMPUESTO">NO IMPUESTO</option>
-                <option value="IVA">IVA</option>
-              </select>
-            </div>
+            {showCantidadDetalles && (
+              <>
+                <div className="input-group">
+                  <label htmlFor="cantidad-base-adicional">UN adicionales</label>
+                  <input
+                    id="cantidad-base-adicional"
+                    className="input-modern"
+                    type="number"
+                    value={cantidadBaseAdicional}
+                    min="0"
+                    step="1"
+                    onChange={(e) => handleCantidadExtraChange(e.target.value)}
+                  />
+                  <small>Opcional. Se suma al equivalente base.</small>
+                </div>
+                <div className="input-group">
+                  <label htmlFor="cantidad-recibida-automatica">Cantidad recibida (automatica)</label>
+                  <input
+                    id="cantidad-recibida-automatica"
+                    className="input-modern"
+                    type="number"
+                    value={Number(previewCantidadBase || 0)}
+                    readOnly
+                  />
+                  <small>Calculada automaticamente en unidades base.</small>
+                </div>
+              </>
+            )}
 
             <div className="input-group">
               <label htmlFor="costo-total">Costo total de la compra</label>
@@ -810,19 +873,62 @@ function RecibirPedidoPage() {
             </div>
 
             <div className="input-group">
-              <label htmlFor="costo-con-impuesto">Costo + impuesto</label>
+              <label htmlFor="precio-venta-sugerido">Precio venta sugerido</label>
               <input
-                id="costo-con-impuesto"
+                id="precio-venta-sugerido"
                 className="input-modern"
                 type="number"
-                value={costoConImpuesto}
-                readOnly
+                value={precioVentaUnidad}
+                onChange={(e) => handlePrecioVentaUnidadChange(e.target.value)}
               />
+              <small>Puedes ajustarlo manualmente y el margen se actualiza.</small>
               <small>
-                Calculado automaticamente segun el tipo de impuesto. IVA aplicado: C$
-                {ivaMonto.toFixed(2)}
+                Recomendado por rotacion: C${precioRecomendadoPorRotacion.toFixed(2)} (
+                {margenPorRotacionSugerido}%)
               </small>
             </div>
+
+            <div className="input-group">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowCostoDetalles((prev) => !prev)}
+              >
+                {showCostoDetalles ? "Ocultar detalles de costo ^" : "Ver detalles de costo v"}
+              </button>
+            </div>
+
+            {showCostoDetalles && (
+              <>
+                <div className="input-group">
+                  <label htmlFor="tipo-impuesto">Impuesto</label>
+                  <select
+                    id="tipo-impuesto"
+                    className="input-modern"
+                    value={tipoImpuesto}
+                    onChange={(e) => setTipoImpuesto(e.target.value)}
+                  >
+                    <option value="NO_IMPUESTO">NO IMPUESTO</option>
+                    <option value="IVA">IVA</option>
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label htmlFor="costo-con-impuesto">Costo + impuesto</label>
+                  <input
+                    id="costo-con-impuesto"
+                    className="input-modern"
+                    type="number"
+                    value={costoConImpuesto}
+                    readOnly
+                  />
+                  <small>
+                    Calculado automaticamente segun el tipo de impuesto. IVA aplicado: C$
+                    {ivaMonto.toFixed(2)}
+                  </small>
+                </div>
+              </>
+            )}
 
             <div className="input-group">
               <label htmlFor="costo-unitario-base">Costo por unidad base</label>
@@ -851,22 +957,6 @@ function RecibirPedidoPage() {
               />
               <small>Ingresa cualquier porcentaje (ej. 7.5, 13.2, 32.14).</small>
               <small>Margen real: {Number(margen || 0).toFixed(2)}%</small>
-            </div>
-
-            <div className="input-group">
-              <label htmlFor="precio-venta-sugerido">Precio venta sugerido</label>
-              <input
-                id="precio-venta-sugerido"
-                className="input-modern"
-                type="number"
-                value={precioVentaUnidad}
-                onChange={(e) => handlePrecioVentaUnidadChange(e.target.value)}
-              />
-              <small>Puedes ajustarlo manualmente y el margen se actualiza.</small>
-              <small>
-                Recomendado por rotacion: C${precioRecomendadoPorRotacion.toFixed(2)} (
-                {margenPorRotacionSugerido}%)
-              </small>
             </div>
 
             <div className="input-group">
@@ -908,9 +998,31 @@ function RecibirPedidoPage() {
             <p>
               Precio anterior: <strong>C${Number(precioOriginal || 0).toFixed(2)}</strong>
             </p>
-            <p>
-              Precio actual: <strong>C${Number(pendingItemData.proposedPrice || 0).toFixed(2)}</strong>
-            </p>
+            <div className="input-group">
+              <label>Precio nuevo</label>
+              <input
+                type="number"
+                className="input-modern"
+                value={pendingItemData.proposedPrice ?? ""}
+                inputMode="decimal"
+                step="0.01"
+                min="0"
+                onClick={(e) => e.target.select()}
+                onChange={(e) =>
+                  setPendingItemData((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          proposedPrice: e.target.value,
+                        }
+                      : prev
+                  )
+                }
+              />
+              <small style={{ color: "#5f6c7b" }}>
+                Puedes ajustar el sugerido antes de actualizar el producto.
+              </small>
+            </div>
             <div className="modal-buttons">
               <button
                 type="button"

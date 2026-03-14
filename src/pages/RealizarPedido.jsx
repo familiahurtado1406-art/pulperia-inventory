@@ -26,12 +26,21 @@ function RealizarPedido() {
   const [proveedores, setProveedores] = useState([]);
   const [historialPedidos, setHistorialPedidos] = useState([]);
   const [proveedorSeleccionado, setProveedorSeleccionado] = useState("");
+  const [proveedorSearch, setProveedorSearch] = useState("");
+  const [showProveedorSuggestions, setShowProveedorSuggestions] = useState(false);
   const [fechaEntrega, setFechaEntrega] = useState(getTomorrowIsoDate);
   const [productos, setProductos] = useState([]);
   const [pedido, setPedido] = useState({});
   const [rotacionPorProducto, setRotacionPorProducto] = useState({});
   const [providerLinkByProductId, setProviderLinkByProductId] = useState({});
-  const [isSavingPedido, setIsSavingPedido] = useState(false);
+    const [isSavingPedido, setIsSavingPedido] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [productSearch, setProductSearch] = useState("");
+  const [sortBy, setSortBy] = useState("name");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [draftProductSearch, setDraftProductSearch] = useState("");
+  const [draftSortBy, setDraftSortBy] = useState("name");
+  const [draftStatusFilter, setDraftStatusFilter] = useState("all");
 
   const proveedoresMap = useMemo(() => {
     const map = {};
@@ -45,6 +54,16 @@ function RealizarPedido() {
     () => proveedoresMap[proveedorSeleccionado] || "",
     [proveedorSeleccionado, proveedoresMap]
   );
+
+  const proveedoresFiltrados = useMemo(() => {
+    const term = proveedorSearch.trim().toLowerCase();
+    if (!term) return proveedores.slice(0, 12);
+    return proveedores
+      .filter((proveedor) =>
+        String(proveedor.nombre || proveedor.id || "").toLowerCase().includes(term)
+      )
+      .slice(0, 12);
+  }, [proveedorSearch, proveedores]);
 
   const getStockBase = useCallback((producto) => getStockBaseValue(producto), []);
 
@@ -167,6 +186,11 @@ function RealizarPedido() {
   }, [location.state]);
 
   useEffect(() => {
+    if (!proveedorSeleccionado) return;
+    setProveedorSearch(proveedoresMap[proveedorSeleccionado] || proveedorSeleccionado);
+  }, [proveedorSeleccionado, proveedoresMap]);
+
+  useEffect(() => {
     const fetchProductosProveedor = async () => {
       if (!proveedorSeleccionado) {
         setProductos([]);
@@ -217,6 +241,66 @@ function RealizarPedido() {
     fetchProductosProveedor();
   }, [proveedorSeleccionado, calcularRecomendadoFinal]);
 
+
+  const openFiltersModal = () => {
+    setDraftProductSearch(productSearch);
+    setDraftSortBy(sortBy);
+    setDraftStatusFilter(statusFilter);
+    setShowFilters(true);
+  };
+
+  const applyFilters = () => {
+    setProductSearch(draftProductSearch);
+    setSortBy(draftSortBy);
+    setStatusFilter(draftStatusFilter);
+    setShowFilters(false);
+  };
+
+  const clearDraftFilters = () => {
+    setDraftProductSearch("");
+    setDraftSortBy("name");
+    setDraftStatusFilter("all");
+  };
+
+  const visibleProducts = useMemo(() => {
+    const term = productSearch.trim().toLowerCase();
+
+    const filtered = productos.filter((producto) => {
+      const rowState = pedido[producto.id] || {};
+      const incluir = rowState.incluir !== false;
+      const recomendadoFinal = calcularRecomendadoFinal(producto);
+
+      if (term && !String(producto.nombre || "").toLowerCase().includes(term)) {
+        return false;
+      }
+
+      if (statusFilter === "included" && !incluir) return false;
+      if (statusFilter === "excluded" && incluir) return false;
+      if (statusFilter === "recommended" && recomendadoFinal <= 0) return false;
+
+      return true;
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "stock") {
+        return Number(getStockBase(b) || 0) - Number(getStockBase(a) || 0);
+      }
+
+      if (sortBy === "recommended") {
+        return calcularRecomendadoFinal(b) - calcularRecomendadoFinal(a);
+      }
+
+      return String(a.nombre || "").localeCompare(String(b.nombre || ""));
+    });
+  }, [
+    calcularRecomendadoFinal,
+    getStockBase,
+    pedido,
+    productSearch,
+    productos,
+    sortBy,
+    statusFilter,
+  ]);
   const generarPedido = async () => {
     if (!proveedorSeleccionado) {
       toast.error("Seleccione un proveedor");
@@ -297,18 +381,48 @@ function RealizarPedido() {
     <div className="pedido-container">
       <div className="proveedor-select">
         <label>Proveedor</label>
-        <select
-          className="input-modern"
-          value={proveedorSeleccionado}
-          onChange={(e) => setProveedorSeleccionado(e.target.value)}
-        >
-          <option value="">Seleccione proveedor</option>
-          {proveedores.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.nombre}
-            </option>
-          ))}
-        </select>
+        <div style={{ position: "relative" }}>
+          <input
+            className="input-modern"
+            placeholder="Buscar proveedor..."
+            value={proveedorSearch}
+            onChange={(e) => {
+              setProveedorSearch(e.target.value);
+              setShowProveedorSuggestions(true);
+              setProveedorSeleccionado("");
+              setProductos([]);
+              setProviderLinkByProductId({});
+            }}
+            onFocus={() => setShowProveedorSuggestions(true)}
+            onClick={(e) => e.target.select()}
+            onBlur={() => {
+              setTimeout(() => setShowProveedorSuggestions(false), 150);
+            }}
+          />
+          {showProveedorSuggestions && (
+            <div className="suggestions-box" style={{ maxHeight: "220px", overflowY: "auto" }}>
+              {proveedoresFiltrados.length > 0 ? (
+                proveedoresFiltrados.map((proveedor) => (
+                  <button
+                    key={proveedor.id}
+                    type="button"
+                    className="suggestion-item"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setProveedorSeleccionado(proveedor.id);
+                      setProveedorSearch(proveedor.nombre || proveedor.id);
+                      setShowProveedorSuggestions(false);
+                    }}
+                  >
+                    {proveedor.nombre || proveedor.id}
+                  </button>
+                ))
+              ) : (
+                <div className="suggestion-item">No se encontraron proveedores.</div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="input-group">
@@ -321,35 +435,49 @@ function RealizarPedido() {
         />
       </div>
       <div className="spacer" />
-      <button
-        type="button"
-        className="btn-secondary"
-        onClick={() =>
-          setPedido((prev) => {
-            const next = { ...prev };
-            productos.forEach((p) => {
-              const actual = prev[p.id] || {};
-              const sugerido = Number(actual.sugeridoBase || 0);
-              const unidadesPorInterna = Number(p.unidadesPorInterna ?? p.unidadesPorPack ?? 0);
-              const internos = unidadesPorInterna > 0 ? Math.floor(sugerido / unidadesPorInterna) : 0;
-              const adicionales = unidadesPorInterna > 0
-                ? Number((sugerido - internos * unidadesPorInterna).toFixed(2))
-                : 0;
-              next[p.id] = {
-                ...actual,
-                incluir: sugerido > 0,
-                pedidoBase: sugerido,
-                medidaPedido: unidadesPorInterna > 0 ? "interna" : "base",
-                cantidadPedido: unidadesPorInterna > 0 ? internos : sugerido,
-                adicionalesBase: unidadesPorInterna > 0 ? adicionales : 0,
-              };
-            });
-            return next;
-          })
-        }
-      >
-        Aplicar sugerencias
-      </button>
+      <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={openFiltersModal}
+        >
+          Filter
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() =>
+            setPedido((prev) => {
+              const next = { ...prev };
+              visibleProducts.forEach((p) => {
+                const actual = prev[p.id] || {};
+                const sugerido = Number(actual.sugeridoBase || 0);
+                const unidadesPorInterna = Number(p.unidadesPorInterna ?? p.unidadesPorPack ?? 0);
+                const internos = unidadesPorInterna > 0 ? Math.floor(sugerido / unidadesPorInterna) : 0;
+                const adicionales = unidadesPorInterna > 0
+                  ? Number((sugerido - internos * unidadesPorInterna).toFixed(2))
+                  : 0;
+                next[p.id] = {
+                  ...actual,
+                  incluir: sugerido > 0,
+                  pedidoBase: sugerido,
+                  medidaPedido: unidadesPorInterna > 0 ? "interna" : "base",
+                  cantidadPedido: unidadesPorInterna > 0 ? internos : sugerido,
+                  adicionalesBase: unidadesPorInterna > 0 ? adicionales : 0,
+                };
+              });
+              return next;
+            })
+          }
+        >
+          Aplicar sugerencias
+        </button>
+      </div>
+      {(productSearch || statusFilter !== "all" || sortBy !== "name") && (
+        <p style={{ marginTop: "12px", color: "#5f6c7b" }}>
+          Mostrando <strong>{visibleProducts.length}</strong> de <strong>{productos.length}</strong> productos
+        </p>
+      )}
 
       <div className="pedido-list">
         <div className="table-scroll">
@@ -365,7 +493,7 @@ function RealizarPedido() {
               </tr>
             </thead>
             <tbody>
-              {productos.map((p) => {
+              {visibleProducts.map((p) => {
                 const recomendadoStock = calcularRecomendadoStock(p);
                 const recomendadoRotacion = getRecomendacionRotacion(p);
                 const recomendadoFinal = recomendadoStock + recomendadoRotacion;
@@ -403,7 +531,7 @@ function RealizarPedido() {
           </table>
         </div>
 
-        {productos.map((p) => {
+        {visibleProducts.map((p) => {
           const recomendadoStock = calcularRecomendadoStock(p);
           const recomendadoRotacion = getRecomendacionRotacion(p);
           const recomendado = recomendadoStock + recomendadoRotacion;
@@ -648,7 +776,61 @@ function RealizarPedido() {
         })}
       </div>
 
-      <button
+
+      {showFilters && (
+        <div className="modal-overlay" onClick={() => setShowFilters(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Filtros de pedido</h3>
+
+            <div className="input-group">
+              <label>Buscar producto</label>
+              <input
+                className="input-modern"
+                placeholder="Buscar producto..."
+                value={draftProductSearch}
+                onChange={(e) => setDraftProductSearch(e.target.value)}
+                onClick={(e) => e.target.select()}
+              />
+            </div>
+
+            <div className="input-group">
+              <label>Ordenar por</label>
+              <select
+                className="input-modern"
+                value={draftSortBy}
+                onChange={(e) => setDraftSortBy(e.target.value)}
+              >
+                <option value="name">Nombre (A - Z)</option>
+                <option value="stock">Stock actual</option>
+                <option value="recommended">Pedido recomendado</option>
+              </select>
+            </div>
+
+            <div className="input-group">
+              <label>Estado</label>
+              <select
+                className="input-modern"
+                value={draftStatusFilter}
+                onChange={(e) => setDraftStatusFilter(e.target.value)}
+              >
+                <option value="all">Todos</option>
+                <option value="included">Incluidos</option>
+                <option value="excluded">Excluidos</option>
+                <option value="recommended">Con sugerencia</option>
+              </select>
+            </div>
+
+            <div style={{ display: "flex", gap: "12px", marginTop: "16px" }}>
+              <button type="button" className="btn-secondary" onClick={clearDraftFilters}>
+                Limpiar filtros
+              </button>
+              <button type="button" className="btn-primary" onClick={applyFilters}>
+                Aplicar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}      <button
         type="button"
         className="btn-primary btn-full"
         onClick={generarPedido}

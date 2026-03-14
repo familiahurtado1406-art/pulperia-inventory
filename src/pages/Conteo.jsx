@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { getDocs, query, updateDoc, where } from "firebase/firestore";
 import {
@@ -6,12 +6,20 @@ import {
   registerInventoryChange,
 } from "../services/inventoryHistoryService";
 import { getProviderProductLinksByProvider } from "../services/providerProductService";
+import { syncProductMetrics } from "../services/productMetricsService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 function Conteo() {
   const [products, setProducts] = useState([]);
   const [proveedores, setProveedores] = useState([]);
   const [selectedProveedorId, setSelectedProveedorId] = useState("");
+  const [proveedorSearch, setProveedorSearch] = useState("");
+  const [showProveedorSuggestions, setShowProveedorSuggestions] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [sortBy, setSortBy] = useState("name");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [draftSortBy, setDraftSortBy] = useState("name");
+  const [draftStatusFilter, setDraftStatusFilter] = useState("all");
   const [conteos, setConteos] = useState({});
   const [adicionalesConteo, setAdicionalesConteo] = useState({});
   const [medidasConteo, setMedidasConteo] = useState({});
@@ -93,12 +101,20 @@ function Conteo() {
     fetchProducts();
   }, [selectedProveedorId]);
 
-  const visibleProducts = useMemo(() => products, [products]);
-
   const selectedProveedor = useMemo(
     () => proveedores.find((p) => p.id === selectedProveedorId),
     [proveedores, selectedProveedorId],
   );
+
+  const proveedoresFiltrados = useMemo(() => {
+    const term = proveedorSearch.trim().toLowerCase();
+    if (!term) return proveedores.slice(0, 12);
+    return proveedores
+      .filter((proveedor) =>
+        String(proveedor.nombre || proveedor.id || "").toLowerCase().includes(term)
+      )
+      .slice(0, 12);
+  }, [proveedorSearch, proveedores]);
 
   const calcularRecomendacion = (product, stockBaseActual) => {
     const faltante =
@@ -122,26 +138,83 @@ function Conteo() {
     setAdicionalesConteo((prev) => ({ ...prev, [productId]: "" }));
   };
 
-  const getConteoCalculado = (product) => {
-    const medidaSeleccionada = medidasConteo[product.id] || "base";
-    const unidadesPorInterna = getUnidadesPorInterna(product);
-    const cantidadRaw = conteos[product.id] ?? String(getStockBase(product));
-    const cantidadContada = Number(cantidadRaw || 0);
-    const adicionalesRaw = adicionalesConteo[product.id] ?? "";
-    const adicionales = Number(adicionalesRaw || 0);
-    const totalBase =
-      medidaSeleccionada === "interna"
-        ? cantidadContada * unidadesPorInterna + adicionales
-        : cantidadContada + adicionales;
-
-    return {
-      medidaSeleccionada,
-      unidadesPorInterna,
-      cantidadRaw,
-      adicionalesRaw,
-      totalBase,
-    };
+  const handleProveedorSelect = (proveedorId) => {
+    setSelectedProveedorId(proveedorId);
+    const proveedorNombre =
+      proveedores.find((proveedor) => proveedor.id === proveedorId)?.nombre || proveedorId || "";
+    setProveedorSearch(proveedorNombre);
+    setShowProveedorSuggestions(false);
   };
+
+  const openFiltersModal = () => {
+    setDraftSortBy(sortBy);
+    setDraftStatusFilter(statusFilter);
+    setShowFilters(true);
+  };
+
+  const applyFilters = () => {
+    setSortBy(draftSortBy);
+    setStatusFilter(draftStatusFilter);
+    setShowFilters(false);
+  };
+
+  const clearDraftFilters = () => {
+    setDraftSortBy("name");
+    setDraftStatusFilter("all");
+  };
+
+  const getConteoCalculado = useCallback(
+    (product) => {
+      const medidaSeleccionada = medidasConteo[product.id] || "base";
+      const unidadesPorInterna = getUnidadesPorInterna(product);
+      const cantidadRaw = conteos[product.id] ?? String(getStockBase(product));
+      const cantidadContada = Number(cantidadRaw || 0);
+      const adicionalesRaw = adicionalesConteo[product.id] ?? "";
+      const adicionales = Number(adicionalesRaw || 0);
+      const totalBase =
+        medidaSeleccionada === "interna"
+          ? cantidadContada * unidadesPorInterna + adicionales
+          : cantidadContada + adicionales;
+
+      return {
+        medidaSeleccionada,
+        unidadesPorInterna,
+        cantidadRaw,
+        adicionalesRaw,
+        totalBase,
+      };
+    },
+    [adicionalesConteo, conteos, medidasConteo],
+  );
+
+  const visibleProducts = useMemo(() => {
+    const filtered = products.filter((product) => {
+      if (statusFilter === "all") return true;
+      const { totalBase } = getConteoCalculado(product);
+      const estado = getStockEstado(product, Number(totalBase || 0));
+      if (statusFilter === "ok") return estado.label === "OK";
+      if (statusFilter === "near") return estado.label === "Cerca del minimo";
+      if (statusFilter === "low") return estado.label === "Bajo minimo";
+      return true;
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "stock") {
+        return Number(getStockBase(b) || 0) - Number(getStockBase(a) || 0);
+      }
+      if (sortBy === "recommended") {
+        const recomendadoA = calcularRecomendacion(a, Number(getConteoCalculado(a).totalBase || 0));
+        const recomendadoB = calcularRecomendacion(b, Number(getConteoCalculado(b).totalBase || 0));
+        return recomendadoB - recomendadoA;
+      }
+      return String(a.nombre || "").localeCompare(String(b.nombre || ""));
+    });
+  }, [
+    products,
+    statusFilter,
+    sortBy,
+    getConteoCalculado,
+  ]);
 
   const modifiedProducts = visibleProducts.filter((product) => {
     const { totalBase } = getConteoCalculado(product);
@@ -200,6 +273,10 @@ function Conteo() {
               },
         ),
       );
+      const productIdsToSync = Object.keys(updatesById);
+      Promise.resolve(syncProductMetrics({ productIds: productIdsToSync })).catch((error) => {
+        console.error("No se pudo actualizar product_metrics tras conteo", error);
+      });
       toast.success(
         `Conteo guardado: ${modifiedProducts.length} productos actualizados`,
       );
@@ -216,18 +293,47 @@ function Conteo() {
       <div className="section-card">
         <h3 className="section-title">Conteo</h3>
         <div className="row">
-          <select
-            className="input-modern proveedor-select"
-            value={selectedProveedorId}
-            onChange={(e) => setSelectedProveedorId(e.target.value)}
-          >
-            <option value="">Seleccione proveedor</option>
-            {proveedores.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.nombre}
-              </option>
-            ))}
-          </select>
+          <div style={{ position: "relative", flex: 1 }}>
+            <input
+              className="input-modern proveedor-select"
+              placeholder="Buscar proveedor..."
+              value={proveedorSearch}
+              onChange={(e) => {
+                setProveedorSearch(e.target.value);
+                setShowProveedorSuggestions(true);
+                setSelectedProveedorId("");
+                setProducts([]);
+                setProductCollectionById({});
+              }}
+              onFocus={() => setShowProveedorSuggestions(true)}
+              onClick={(e) => e.target.select()}
+              onBlur={() => {
+                setTimeout(() => setShowProveedorSuggestions(false), 150);
+              }}
+            />
+            {showProveedorSuggestions && (
+              <div className="suggestions-box" style={{ maxHeight: "220px", overflowY: "auto" }}>
+                {proveedoresFiltrados.length > 0 ? (
+                  proveedoresFiltrados.map((proveedor) => (
+                    <button
+                      key={proveedor.id}
+                      type="button"
+                      className="suggestion-item"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => handleProveedorSelect(proveedor.id)}
+                    >
+                      {proveedor.nombre || proveedor.id}
+                    </button>
+                  ))
+                ) : (
+                  <div className="suggestion-item">No se encontraron proveedores.</div>
+                )}
+              </div>
+            )}
+          </div>
+          <button type="button" className="btn-secondary" onClick={openFiltersModal}>
+            Filter
+          </button>
         </div>
         {selectedProveedorId && (
           <p>
@@ -479,6 +585,50 @@ function Conteo() {
           </div>
         )}
       </div>
+
+      {showFilters && (
+        <div className="modal-overlay" onClick={() => setShowFilters(false)}>
+          <div className="modal modal-compact" onClick={(e) => e.stopPropagation()}>
+            <h3>Filtros de conteo</h3>
+
+            <div className="input-group">
+              <label>Ordenar por</label>
+              <select
+                className="input-modern"
+                value={draftSortBy}
+                onChange={(e) => setDraftSortBy(e.target.value)}
+              >
+                <option value="name">Nombre (A - Z)</option>
+                <option value="stock">Stock actual</option>
+                <option value="recommended">Recomendado</option>
+              </select>
+            </div>
+
+            <div className="input-group">
+              <label>Estado</label>
+              <select
+                className="input-modern"
+                value={draftStatusFilter}
+                onChange={(e) => setDraftStatusFilter(e.target.value)}
+              >
+                <option value="all">Todos</option>
+                <option value="ok">OK</option>
+                <option value="near">Cerca del minimo</option>
+                <option value="low">Bajo minimo</option>
+              </select>
+            </div>
+
+            <div className="modal-buttons">
+              <button type="button" className="btn-secondary" onClick={clearDraftFilters}>
+                Limpiar filtros
+              </button>
+              <button type="button" className="btn-primary" onClick={applyFilters}>
+                Aplicar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

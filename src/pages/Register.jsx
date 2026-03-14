@@ -1,4 +1,5 @@
 import { useState } from "react";
+import toast from "react-hot-toast";
 import { registerUser } from "../services/authService";
 
 function Register() {
@@ -11,10 +12,10 @@ function Register() {
 
     try {
       await registerUser(email, password, nombreNegocio);
-      alert("Usuario y negocio creados correctamente");
+      toast.success("Usuario y negocio creados correctamente");
     } catch (error) {
       console.error("ERROR:", error);
-      alert(error.message);
+      toast.error(error.message);
     }
   };
 

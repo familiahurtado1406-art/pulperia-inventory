@@ -1,4 +1,4 @@
-import { Timestamp, getDocs, query, updateDoc, where } from "firebase/firestore";
+import { Timestamp, getDocs, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
 import { userCollection, userDoc } from "./userScopedFirestore";
 
 const toMillis = (value) => {
@@ -25,9 +25,15 @@ const getStockBase = (product) =>
   Number(product?.stockBase ?? product?.stockUnidades ?? product?.stockActual ?? 0);
 
 const classifyRotation = (promedioDiario) => {
-  if (promedioDiario >= 5) return "alta";
+  if (promedioDiario > 3) return "alta";
   if (promedioDiario >= 1) return "media";
   return "baja";
+};
+
+const getCoverageDays = (promedioDiario) => {
+  if (promedioDiario > 3) return 7;
+  if (promedioDiario >= 1) return 14;
+  return 21;
 };
 
 const classifyTrend = (currentAvg, previousAvg) => {
@@ -229,6 +235,7 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
     daysCoverage,
     forecastDays,
     syncRotationToProducts: !!options.syncRotationToProducts,
+    syncInventoryTargets: !!options.syncInventoryTargets,
   });
 
   const now = Date.now();
@@ -330,26 +337,40 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
     return acc;
   }, {});
 
-  const rotationByProduct = {};
+  const movementByProduct = {};
   const dailySalesByProduct = {};
-  const registerSale = ({ productId, sold, movementMillis, movementDate }) => {
-    if (!productId || sold <= 0) return;
-    if (!rotationByProduct[productId]) {
-      rotationByProduct[productId] = {
-        semanal: 0,
-        mensual: 0,
-        semanaActual: 0,
-        semanaAnterior: 0,
+  const getMovementBucket = (productId) => {
+    if (!movementByProduct[productId]) {
+      movementByProduct[productId] = {
+        real: {
+          semanal: 0,
+          mensual: 0,
+          semanaActual: 0,
+          semanaAnterior: 0,
+        },
+        inferred: {
+          semanal: 0,
+          mensual: 0,
+          semanaActual: 0,
+          semanaAnterior: 0,
+        },
       };
     }
+    return movementByProduct[productId];
+  };
+
+  const registerSale = ({ productId, sold, movementMillis, movementDate, source = "real" }) => {
+    if (!productId || sold <= 0) return;
+    const bucket = getMovementBucket(productId);
+    const sourceBucket = source === "inferred" ? bucket.inferred : bucket.real;
     if (!dailySalesByProduct[productId]) dailySalesByProduct[productId] = {};
 
     const dayKey = movementDate ? movementDate.toISOString().slice(0, 10) : "";
-    if (movementMillis >= monthAgo) rotationByProduct[productId].mensual += sold;
-    if (movementMillis >= weekAgo) rotationByProduct[productId].semanal += sold;
-    if (movementMillis >= weekAgo) rotationByProduct[productId].semanaActual += sold;
+    if (movementMillis >= monthAgo) sourceBucket.mensual += sold;
+    if (movementMillis >= weekAgo) sourceBucket.semanal += sold;
+    if (movementMillis >= weekAgo) sourceBucket.semanaActual += sold;
     if (movementMillis < weekAgo && movementMillis >= prevWeekAgo) {
-      rotationByProduct[productId].semanaAnterior += sold;
+      sourceBucket.semanaAnterior += sold;
     }
     if (dayKey) {
       dailySalesByProduct[productId][dayKey] =
@@ -383,6 +404,7 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
           sold: Math.max(0, pickMovementQty(item)),
           movementMillis,
           movementDate,
+          source: "real",
         });
       });
       return;
@@ -393,22 +415,21 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
       sold: Math.max(0, pickMovementQty(movement)),
       movementMillis,
       movementDate,
+      source: "real",
     });
   });
 
-  // Compatibility fallback while some deployments still infer sales from conteos.
-  if (Object.keys(rotationByProduct).length === 0) {
-    history.forEach((movement) => {
-      const difference = Number(movement.diferencia || 0);
-      if (movement.tipoMovimiento !== "conteo" || difference >= 0) return;
-      registerSale({
-        productId: String(movement.productoId || ""),
-        sold: Math.abs(difference),
-        movementMillis: toMillis(movement.fecha),
-        movementDate: toDate(movement.fecha),
-      });
+  history.forEach((movement) => {
+    const difference = Number(movement.diferencia || 0);
+    if (movement.tipoMovimiento !== "conteo" || difference >= 0) return;
+    registerSale({
+      productId: String(movement.productoId || ""),
+      sold: Math.abs(difference),
+      movementMillis: toMillis(movement.fecha),
+      movementDate: toDate(movement.fecha),
+      source: "inferred",
     });
-  }
+  });
 
   const rankingBase = products
     .filter((product) => product.activo !== false)
@@ -416,24 +437,49 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
       const productoId = String(product.productoId || product.id);
       const bestProvider =
         bestProviderByProduct[String(product.id)] || bestProviderByProduct[productoId] || null;
-      const rotation = rotationByProduct[productoId] || { semanal: 0, mensual: 0 };
-      const rotacionSemanal = Number(rotation.semanal || 0);
-      const rotacionMensual = Number(rotation.mensual || 0);
-      const promedioDiario = Number((rotacionMensual / lookbackDays).toFixed(2));
-      const promedioSemanaActual = Number((Number(rotation.semanaActual || 0) / 7).toFixed(2));
-      const promedioSemanaAnterior = Number((Number(rotation.semanaAnterior || 0) / 7).toFixed(2));
-      const tendencia = classifyTrend(promedioSemanaActual, promedioSemanaAnterior);
+      const movement = movementByProduct[productoId] || {
+        real: { semanal: 0, mensual: 0, semanaActual: 0, semanaAnterior: 0 },
+        inferred: { semanal: 0, mensual: 0, semanaActual: 0, semanaAnterior: 0 },
+      };
+      const ventasRealesSemanal = Number(movement.real.semanal || 0);
+      const ventasRealesMensual = Number(movement.real.mensual || 0);
+      const salidasInferidasSemanal = Number(movement.inferred.semanal || 0);
+      const salidasInferidasMensual = Number(movement.inferred.mensual || 0);
+      const rotacionSemanal = Number((ventasRealesSemanal + salidasInferidasSemanal).toFixed(2));
+      const rotacionMensual = Number((ventasRealesMensual + salidasInferidasMensual).toFixed(2));
+      const createdMillis = toMillis(product.createdAt || product.fechaCreacion || product.fechaAlta);
+      const daysSinceCreated =
+        createdMillis > 0
+          ? Math.max(1, Math.ceil((now - createdMillis) / (1000 * 60 * 60 * 24)))
+          : lookbackDays;
+      const daysForAverage = Math.max(1, Math.min(lookbackDays, daysSinceCreated));
+      const promedioDiario = Number((rotacionMensual / daysForAverage).toFixed(2));
+      const promedioSemanaActualReal = Number((Number(movement.real.semanaActual || 0) / 7).toFixed(2));
+      const promedioSemanaAnteriorReal = Number((Number(movement.real.semanaAnterior || 0) / 7).toFixed(2));
+      const promedioSemanaActual = Number(
+        ((Number(movement.real.semanaActual || 0) + Number(movement.inferred.semanaActual || 0)) / 7).toFixed(2)
+      );
+      const promedioSemanaAnterior = Number(
+        ((Number(movement.real.semanaAnterior || 0) + Number(movement.inferred.semanaAnterior || 0)) / 7).toFixed(2)
+      );
+      const tendencia =
+        ventasRealesMensual >= 5
+          ? classifyTrend(promedioSemanaActualReal, promedioSemanaAnteriorReal)
+          : "sin_datos";
       const demandaProximosDias = Number((promedioDiario * forecastDays).toFixed(2));
       const stockBase = getStockBase(product);
-      const stockObjetivo = Number(product.stockObjetivo || 0);
-      const stockMin = Number(product.stockMin || 0);
-      const stockRecomendado = Number((promedioDiario * daysCoverage).toFixed(2));
-      const sugerirSubirStockObjetivo = stockRecomendado > stockObjetivo;
+      const stockObjetivoActual = Number(product.stockObjetivo || 0);
+      const stockMinActual = Number(product.stockMin || 0);
+      const coberturaAutoDias = getCoverageDays(promedioDiario);
+      const stockObjetivoAuto = Math.round(promedioDiario * coberturaAutoDias);
+      const stockMinAuto = Math.round(stockObjetivoAuto * 0.4);
+      const stockRecomendado = Number(stockObjetivoAuto.toFixed(2));
+      const sugerirSubirStockObjetivo = stockObjetivoAuto > stockObjetivoActual;
       const gananciaUnidad = Number(product.gananciaUnidad || 0);
-      const rentabilidad = Number((rotacionMensual * gananciaUnidad).toFixed(2));
+      const rentabilidad = Number((ventasRealesMensual * gananciaUnidad).toFixed(2));
       const diasStockRestantes =
         promedioDiario > 0 ? Number((stockBase / promedioDiario).toFixed(2)) : Infinity;
-      const cantidadComprar = Number(Math.max(0, stockRecomendado - stockBase).toFixed(2));
+      const cantidadComprar = Number(Math.max(0, stockObjetivoAuto - stockBase).toFixed(2));
       const sellThrough30 =
         stockBase > 0 ? Number(((rotacionMensual / stockBase) * 100).toFixed(2)) : 0;
       const unidadesPorPack = Number(product.unidadesPorInterna ?? product.unidadesPorPack ?? 0);
@@ -452,14 +498,25 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
         proveedorId: bestProvider?.proveedorId || "",
         proveedorNombre: bestProvider?.proveedorNombre || "-",
         stockBase,
-        stockObjetivo,
-        stockMin,
+        stockObjetivo: stockObjetivoAuto,
+        stockMin: stockMinAuto,
+        stockObjetivoActual,
+        stockMinActual,
+        stockObjetivoAuto,
+        stockMinAuto,
         rotacionSemanal: Number(rotacionSemanal.toFixed(2)),
         rotacionMensual: Number(rotacionMensual.toFixed(2)),
+        ventasRealesSemanal: Number(ventasRealesSemanal.toFixed(2)),
+        ventasRealesMensual: Number(ventasRealesMensual.toFixed(2)),
+        salidasInferidasSemanal: Number(salidasInferidasSemanal.toFixed(2)),
+        salidasInferidasMensual: Number(salidasInferidasMensual.toFixed(2)),
         promedioDiario,
         promedio30: promedioDiario,
+        diasPromedioUsados: daysForAverage,
         promedioSemanaActual,
         promedioSemanaAnterior,
+        promedioSemanaActualReal,
+        promedioSemanaAnteriorReal,
         tendencia,
         forecastDays,
         demandaProximosDias,
@@ -467,7 +524,8 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
         sugerirSubirStockObjetivo,
         diasStockRestantes,
         nivelStock,
-        objetivoStockDias: daysCoverage,
+        objetivoStockDias: coberturaAutoDias,
+        clasificacion: classifyRotation(promedioDiario),
         cantidadComprar,
         sellThrough30,
         sellThroughCategoria: classifySellThrough(sellThrough30),
@@ -480,38 +538,50 @@ export const getInventoryMovementAnalytics = async (days = 30, options = {}) => 
       };
     });
 
-  if (options.syncRotationToProducts) {
+  if (options.syncRotationToProducts || options.syncInventoryTargets) {
     const updates = rankingBase
       .filter((item) => {
         const current = products.find((p) => String(p.id) === String(item.id));
-        return String(current?.tipoRotacion || "") !== String(item.rotacionTipo || "");
+        return (
+          String(current?.tipoRotacion || "") !== String(item.rotacionTipo || "") ||
+          Number(current?.stockObjetivo || 0) !== Number(item.stockObjetivoAuto || 0) ||
+          Number(current?.stockMin || 0) !== Number(item.stockMinAuto || 0) ||
+          Number(current?.promedioDiario || 0) !== Number(item.promedioDiario || 0) ||
+          String(current?.clasificacion || "") !== String(item.clasificacion || "")
+        );
       })
       .map((item) =>
         updateDoc(userDoc("products", item.id), {
           tipoRotacion: item.rotacionTipo,
+          stockObjetivo: item.stockObjetivoAuto,
+          stockMin: item.stockMinAuto,
+          promedioDiario: item.promedioDiario,
+          clasificacion: item.clasificacion,
+          diasCobertura: item.objetivoStockDias,
+          ultimaActualizacionMetricas: serverTimestamp(),
         })
       );
     await Promise.all(updates);
   }
 
-  const rankingMayorRotacion = [...rankingBase].sort(
-    (a, b) => b.rotacionSemanal - a.rotacionSemanal
-  );
+  const rankingMayorRotacion = [...rankingBase]
+    .filter((product) => Number(product.ventasRealesSemanal || 0) > 0)
+    .sort((a, b) => b.ventasRealesSemanal - a.ventasRealesSemanal);
   const rankingMenorRotacion = [...rankingBase].sort(
     (a, b) => a.rotacionSemanal - b.rotacionSemanal
   );
-  const rankingRentabilidad = [...rankingBase].sort(
-    (a, b) => b.rentabilidadMensual - a.rentabilidadMensual
-  );
+  const rankingRentabilidad = [...rankingBase]
+    .filter((product) => Number(product.ventasRealesMensual || 0) > 0)
+    .sort((a, b) => b.rentabilidadMensual - a.rentabilidadMensual);
   const rankingTendenciaCreciente = rankingBase
     .filter((product) => product.tendencia === "creciente")
-    .sort((a, b) => b.promedioSemanaActual - a.promedioSemanaActual);
+    .sort((a, b) => b.promedioSemanaActualReal - a.promedioSemanaActualReal);
   const rankingTendenciaDecreciente = rankingBase
     .filter((product) => product.tendencia === "decreciente")
-    .sort((a, b) => b.promedioSemanaAnterior - a.promedioSemanaAnterior);
+    .sort((a, b) => b.promedioSemanaAnteriorReal - a.promedioSemanaAnteriorReal);
   const rankingTendenciaEstable = rankingBase
     .filter((product) => product.tendencia === "estable")
-    .sort((a, b) => b.rotacionSemanal - a.rotacionSemanal);
+    .sort((a, b) => b.ventasRealesSemanal - a.ventasRealesSemanal);
   const stockObjetivoSugerido = rankingBase
     .filter((product) => product.sugerirSubirStockObjetivo)
     .sort((a, b) => b.stockRecomendado - a.stockRecomendado);

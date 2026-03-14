@@ -8,6 +8,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import AppLayout from "../components/AppLayout";
+import { confirmToast } from "../services/confirmToast";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 const DAY_OPTIONS = [
@@ -68,6 +69,7 @@ function ProveedoresPage() {
   const [frecuenciaVisitaDias, setFrecuenciaVisitaDias] = useState(7);
   const [activo, setActivo] = useState(true);
   const [editingProveedor, setEditingProveedor] = useState(null);
+  const [detalleProveedor, setDetalleProveedor] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -210,7 +212,12 @@ function ProveedoresPage() {
   };
 
   const handleDelete = async (id) => {
-    const confirmDelete = window.confirm("Seguro que deseas eliminar este proveedor?");
+    const confirmDelete = await confirmToast({
+      title: "Eliminar proveedor",
+      description: "Seguro que deseas eliminar este proveedor?",
+      confirmLabel: "Eliminar",
+      confirmTone: "danger",
+    });
     if (!confirmDelete) return;
     setIsDeleting(true);
 
@@ -253,7 +260,14 @@ function ProveedoresPage() {
         </div>
       </div>
 
-      <div className="proveedores-list">
+      <div
+        className="proveedores-list"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: "12px",
+        }}
+      >
         {proveedoresFiltrados.map((prov) => (
           <div key={prov.id} className="proveedor-card">
             <div className="prov-header">
@@ -267,25 +281,19 @@ function ProveedoresPage() {
 
             <p>Colaborador: {prov.nombreColaborador || "-"}</p>
             <p>Telefono: {prov.telefono || "-"}</p>
-            <p>Ruta: {prov.rutaCatalogo || "-"}</p>
             <p>
               Dias entrega:{" "}
               {dayLabels(prov.diasEntrega ?? prov.diaEntrega ?? prov.dia_entrega) || "-"}
             </p>
-            <p>
-              Dias pedido:{" "}
-              {dayLabels(prov.diasPedido ?? prov.diaFacturacion ?? prov.dia_facturacion) || "-"}
-            </p>
-            <p>
-              Frecuencia entrega:{" "}
-              {Number(prov.frecuenciaEntregaDias ?? prov.frecuencia_entrega_dias ?? 7)} dias
-            </p>
-            <p>
-              Frecuencia visita:{" "}
-              {Number(prov.frecuenciaVisitaDias ?? prov.frecuencia_visita_dias ?? 7)} dias
-            </p>
 
             <div className="history-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setDetalleProveedor(prov)}
+              >
+                Detalles
+              </button>
               <button type="button" className="btn-secondary" onClick={() => handleEdit(prov)}>
                 Editar
               </button>
@@ -457,6 +465,85 @@ function ProveedoresPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {detalleProveedor && (
+        <div className="modal-overlay" onClick={() => setDetalleProveedor(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>{detalleProveedor.nombre}</h3>
+
+            <div className="input-group">
+              <label>Colaborador</label>
+              <div className="input-modern">{detalleProveedor.nombreColaborador || "-"}</div>
+            </div>
+
+            <div className="input-group">
+              <label>Telefono</label>
+              <div className="input-modern">{detalleProveedor.telefono || "-"}</div>
+            </div>
+
+            <div className="input-group">
+              <label>Ruta</label>
+              <div className="input-modern">{detalleProveedor.rutaCatalogo || "-"}</div>
+            </div>
+
+            <div className="input-group">
+              <label>Dias entrega</label>
+              <div className="input-modern">
+                {dayLabels(
+                  detalleProveedor.diasEntrega ??
+                    detalleProveedor.diaEntrega ??
+                    detalleProveedor.dia_entrega
+                ) || "-"}
+              </div>
+            </div>
+
+            <div className="input-group">
+              <label>Dias pedido</label>
+              <div className="input-modern">
+                {dayLabels(
+                  detalleProveedor.diasPedido ??
+                    detalleProveedor.diaFacturacion ??
+                    detalleProveedor.dia_facturacion
+                ) || "-"}
+              </div>
+            </div>
+
+            <div className="input-group">
+              <label>Frecuencia entrega</label>
+              <div className="input-modern">
+                {Number(
+                  detalleProveedor.frecuenciaEntregaDias ??
+                    detalleProveedor.frecuencia_entrega_dias ??
+                    7
+                )}{" "}
+                dias
+              </div>
+            </div>
+
+            <div className="input-group">
+              <label>Frecuencia visita</label>
+              <div className="input-modern">
+                {Number(
+                  detalleProveedor.frecuenciaVisitaDias ??
+                    detalleProveedor.frecuencia_visita_dias ??
+                    7
+                )}{" "}
+                dias
+              </div>
+            </div>
+
+            <div className="modal-buttons">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setDetalleProveedor(null)}
+              >
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )}

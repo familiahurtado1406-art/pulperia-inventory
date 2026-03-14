@@ -14,6 +14,7 @@ import AppLayout from "../components/AppLayout";
 import ProductCard from "../components/ProductCard";
 import SeccionDistribuidores from "../components/SeccionDistribuidores";
 import SkeletonCard from "../components/SkeletonCard";
+import { confirmToast } from "../services/confirmToast";
 import { upsertProviderProductLink } from "../services/providerProductService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 import { getInventoryMovementAnalytics } from "../services/analyticsService";
@@ -502,9 +503,12 @@ function Products() {
   };
 
   const handleDelete = async (id) => {
-    const confirmDelete = window.confirm(
-      "Seguro que deseas eliminar este producto?"
-    );
+    const confirmDelete = await confirmToast({
+      title: "Eliminar producto",
+      description: "Seguro que deseas eliminar este producto?",
+      confirmLabel: "Eliminar",
+      confirmTone: "danger",
+    });
     if (!confirmDelete) return;
     setIsDeletingId(id);
 

@@ -3,6 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { getDocs } from "firebase/firestore";
 import { getInventoryMovementAnalytics } from "../services/analyticsService";
 import { readLocalCache, writeLocalCache } from "../services/localCacheService";
+import {
+  getProductMetricsOverview,
+  syncProductMetrics,
+} from "../services/productMetricsService";
 import { userCollection } from "../services/userScopedFirestore";
 
 const toDayNumber = (date = new Date()) => {
@@ -60,10 +64,19 @@ function Dashboard() {
 
       setLoading(true);
       try {
-        const [data, providersSnap] = await Promise.all([
-          getInventoryMovementAnalytics(30),
+        const [metricsOverview, providersSnap] = await Promise.all([
+          getProductMetricsOverview(),
           getDocs(userCollection("proveedores")),
         ]);
+        let data = metricsOverview;
+        if (!data || !Array.isArray(data.productosAnalizados) || data.productosAnalizados.length === 0) {
+          data = await syncProductMetrics();
+        }
+        if (!data || !Array.isArray(data.productosAnalizados) || data.productosAnalizados.length === 0) {
+          data = await getInventoryMovementAnalytics(30, {
+            syncInventoryTargets: true,
+          });
+        }
         const loadedProviders = providersSnap.docs.map((docItem) => ({
           id: docItem.id,
           ...docItem.data(),
@@ -246,7 +259,9 @@ function Dashboard() {
             <div>🏆 Producto lider</div>
             <h2>{topWeekly?.nombre || "-"}</h2>
             <span className="badge-rotacion alta">
-              {Number(topWeekly?.rotacionSemanal || 0).toFixed(2)} UN/semana
+              {topWeekly
+                ? `${Number(topWeekly?.ventasRealesSemanal || 0).toFixed(2)} UN/semana`
+                : "Sin ventas"}
             </span>
           </div>
 
@@ -254,7 +269,9 @@ function Dashboard() {
             <div>📈 Tendencia al alza</div>
             <h2>{topTrend?.nombre || "-"}</h2>
             <span className="badge-rotacion media">
-              {Number(topTrend?.promedioSemanaActual || 0).toFixed(2)} UN/dia
+              {topTrend
+                ? `${Number(topTrend?.promedioSemanaActualReal || 0).toFixed(2)} UN/dia`
+                : "Datos insuficientes"}
             </span>
           </div>
 
@@ -262,7 +279,9 @@ function Dashboard() {
             <div>💰 Mas rentable</div>
             <h2>{topRentable?.nombre || "-"}</h2>
             <span className="badge-rotacion alta">
-              C${Number(topRentable?.rentabilidadMensual || 0).toFixed(2)}
+              {topRentable
+                ? `C$${Number(topRentable?.rentabilidadMensual || 0).toFixed(2)}`
+                : "Sin ventas"}
             </span>
           </div>
 

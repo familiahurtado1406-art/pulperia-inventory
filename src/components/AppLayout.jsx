@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { Link, useNavigate } from "react-router-dom";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "../firebase/config";
@@ -23,7 +24,7 @@ export default function AppLayout({ title, children, onAdd, onRefresh }) {
       setOpenDrawer(false);
       navigate("/login", { replace: true });
     } catch (error) {
-      alert(error.message);
+      toast.error(error.message);
     }
   };
 

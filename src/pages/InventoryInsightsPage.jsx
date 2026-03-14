@@ -134,7 +134,7 @@ function InventoryInsightsPage() {
                 {"stockRecomendado" in item && (
                   <p>
                     <strong>Stock recomendado:</strong> {Number(item.stockRecomendado || 0).toFixed(2)} UN
-                    {"  "}({Number(item.stockObjetivo || 0).toFixed(2)} actual)
+                    {"  "}({Number((item.stockObjetivoActual ?? item.stockObjetivo) || 0).toFixed(2)} actual)
                   </p>
                 )}
                 {"sugerirSubirStockObjetivo" in item && item.sugerirSubirStockObjetivo && (
