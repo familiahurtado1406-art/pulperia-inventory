@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { getDocs, query, updateDoc, where } from "firebase/firestore";
+import { updateDoc } from "firebase/firestore";
 import {
   getStockBaseValue,
   registerInventoryChange,
 } from "../services/inventoryHistoryService";
 import { getProviderProductLinksByProvider } from "../services/providerProductService";
 import { syncProductMetrics } from "../services/productMetricsService";
-import { userCollection, userDoc } from "../services/userScopedFirestore";
+import {
+  fetchActiveProducts,
+  subscribeActiveProducts,
+  subscribeUserCollection,
+} from "../services/realtimeFirestoreService";
+import { userDoc } from "../services/userScopedFirestore";
 
 function Conteo() {
   const [products, setProducts] = useState([]);
@@ -31,20 +36,13 @@ function Conteo() {
     Number(product.unidadesPorInterna ?? product.unidadesPorPack ?? 0);
 
   useEffect(() => {
-    const fetchProveedores = async () => {
-      const proveedoresSnap = await getDocs(userCollection("proveedores"));
-      setProveedores(
-        proveedoresSnap.docs.map((docItem) => ({
-          id: docItem.id,
-          ...docItem.data(),
-        })),
-      );
-    };
-
-    fetchProveedores();
+    const unsubscribe = subscribeUserCollection("proveedores", setProveedores);
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
+    let unsubscribe = () => {};
+
     const fetchProducts = async () => {
       if (!selectedProveedorId) {
         setProducts([]);
@@ -52,22 +50,14 @@ function Conteo() {
         return;
       }
 
-      const buildQuery = (collectionName) =>
-        query(userCollection(collectionName), where("activo", "==", true));
-
-      const primarySnap = await getDocs(buildQuery("products"));
-      let primaryData = primarySnap.docs.map((docItem) => ({
-        id: docItem.id,
-        ...docItem.data(),
-        _collection: "products",
-      }));
-
       const links =
         await getProviderProductLinksByProvider(selectedProveedorId);
       const ids = new Set(
         links.map((link) => String(link.productDocId || link.productoId || "")),
       );
-      primaryData = primaryData.filter((item) => ids.has(String(item.id)));
+
+      const loadedProducts = await fetchActiveProducts();
+      let primaryData = loadedProducts.filter((item) => ids.has(String(item.id)));
 
       if (primaryData.length > 0) {
         setProducts(primaryData);
@@ -77,28 +67,22 @@ function Conteo() {
             return acc;
           }, {}),
         );
+        unsubscribe = subscribeActiveProducts((activeProducts) => {
+          const filteredProducts = activeProducts.filter((item) => ids.has(String(item.id)));
+          setProducts(filteredProducts);
+          setProductCollectionById(
+            filteredProducts.reduce((acc, item) => {
+              acc[item.id] = "products";
+              return acc;
+            }, {}),
+          );
+        });
         return;
       }
-
-      const fallbackSnap = await getDocs(buildQuery("productos"));
-      let fallbackData = fallbackSnap.docs.map((docItem) => ({
-        id: docItem.id,
-        ...docItem.data(),
-        _collection: "productos",
-      }));
-
-      fallbackData = fallbackData.filter((item) => ids.has(String(item.id)));
-
-      setProducts(fallbackData);
-      setProductCollectionById(
-        fallbackData.reduce((acc, item) => {
-          acc[item.id] = "productos";
-          return acc;
-        }, {}),
-      );
     };
 
     fetchProducts();
+    return () => unsubscribe();
   }, [selectedProveedorId]);
 
   const selectedProveedor = useMemo(

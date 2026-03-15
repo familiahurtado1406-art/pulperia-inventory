@@ -35,11 +35,6 @@ function SeccionDistribuidores({
       unidadesPorInternaOverride ??
       0
   );
-  const usaCostoUnitarioCalculado = Number(costoPack || 0) > 0 && unidadesPorInterna > 0;
-  const costoUnitarioCalculado = useMemo(() => {
-    if (!usaCostoUnitarioCalculado) return "";
-    return (Number(costoPack || 0) / unidadesPorInterna).toFixed(2);
-  }, [costoPack, unidadesPorInterna, usaCostoUnitarioCalculado]);
   const relacionesVisibles = isDraftMode ? draftProviders : relaciones;
 
   const proveedoresMap = useMemo(() => {
@@ -137,9 +132,7 @@ function SeccionDistribuidores({
       toast.error("Selecciona un distribuidor");
       return;
     }
-    const costoUnitarioFinal = Number(
-      usaCostoUnitarioCalculado ? costoUnitarioCalculado : costoUnitario
-    );
+    const costoUnitarioFinal = Number(costoUnitario || 0);
     if (costoUnitarioFinal <= 0) {
       toast.error("Ingresa un costo unitario valido");
       return;
@@ -357,12 +350,18 @@ function SeccionDistribuidores({
               <input
                 className="input-modern"
                 type="number"
-                value={usaCostoUnitarioCalculado ? costoUnitarioCalculado : costoUnitario}
-                onChange={(e) => setCostoUnitario(e.target.value)}
-                readOnly={usaCostoUnitarioCalculado}
+                value={costoUnitario}
+                onChange={(e) => {
+                  const nextValue = e.target.value;
+                  setCostoUnitario(nextValue);
+                  if (unidadesPorInterna > 0) {
+                    const nextPack = Number(nextValue || 0) * unidadesPorInterna;
+                    setCostoPack(nextValue === "" ? "" : nextPack.toFixed(2));
+                  }
+                }}
               />
-              {usaCostoUnitarioCalculado && (
-                <small>Calculado automaticamente segun pack.</small>
+              {unidadesPorInterna > 0 && (
+                <small>Si cambias este valor, el costo pack se actualiza automaticamente.</small>
               )}
             </div>
 
@@ -372,7 +371,14 @@ function SeccionDistribuidores({
                 className="input-modern"
                 type="number"
                 value={costoPack}
-                onChange={(e) => setCostoPack(e.target.value)}
+                onChange={(e) => {
+                  const nextValue = e.target.value;
+                  setCostoPack(nextValue);
+                  if (unidadesPorInterna > 0) {
+                    const nextUnit = Number(nextValue || 0) / unidadesPorInterna;
+                    setCostoUnitario(nextValue === "" ? "" : nextUnit.toFixed(2));
+                  }
+                }}
               />
               {unidadesPorInterna > 0 && (
                 <small>

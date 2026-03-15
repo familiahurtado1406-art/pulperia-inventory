@@ -3,16 +3,18 @@ import { useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   addDoc,
-  getDocs,
-  query,
   serverTimestamp,
-  where,
 } from "firebase/firestore";
 import {
   getStockBaseValue,
   getWeeklyRotationByProduct,
 } from "../services/inventoryHistoryService";
 import { getProviderProductLinksByProvider } from "../services/providerProductService";
+import {
+  fetchActiveProducts,
+  subscribeActiveProducts,
+  subscribeUserCollection,
+} from "../services/realtimeFirestoreService";
 import { userCollection } from "../services/userScopedFirestore";
 
 const getTomorrowIsoDate = () => {
@@ -160,23 +162,17 @@ function RealizarPedido() {
   }, [historialPedidos, proveedoresMap]);
 
   useEffect(() => {
-    const fetchInitialData = async () => {
-      const [proveedoresSnap, pedidosSnap, rotacionSemanal] = await Promise.all([
-        getDocs(userCollection("proveedores")),
-        getDocs(userCollection("pedidos")),
-        getWeeklyRotationByProduct(7),
-      ]);
+    const unsubscribeProveedores = subscribeUserCollection("proveedores", setProveedores);
+    const unsubscribePedidos = subscribeUserCollection("pedidos", setHistorialPedidos);
 
-      setProveedores(
-        proveedoresSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
-      );
-      setHistorialPedidos(
-        pedidosSnap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
-      );
-      setRotacionPorProducto(rotacionSemanal);
+    getWeeklyRotationByProduct(7).then(setRotacionPorProducto).catch((error) => {
+      console.error("No se pudo cargar la rotacion semanal", error);
+    });
+
+    return () => {
+      unsubscribeProveedores();
+      unsubscribePedidos();
     };
-
-    fetchInitialData();
   }, []);
 
   useEffect(() => {
@@ -191,6 +187,8 @@ function RealizarPedido() {
   }, [proveedorSeleccionado, proveedoresMap]);
 
   useEffect(() => {
+    let unsubscribe = () => {};
+
     const fetchProductosProveedor = async () => {
       if (!proveedorSeleccionado) {
         setProductos([]);
@@ -198,12 +196,8 @@ function RealizarPedido() {
         return;
       }
 
-      const q = query(
-        userCollection("products"),
-        where("activo", "==", true)
-      );
-      const [snapshot, links] = await Promise.all([
-        getDocs(q),
+      const [loadedProducts, links] = await Promise.all([
+        fetchActiveProducts(),
         getProviderProductLinksByProvider(proveedorSeleccionado),
       ]);
       const providerMap = links.reduce((acc, link) => {
@@ -216,9 +210,7 @@ function RealizarPedido() {
       const productIds = new Set(
         links.map((link) => String(link.productDocId || link.productoId || ""))
       );
-      const data = snapshot.docs
-        .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
-        .filter((product) => productIds.has(String(product.id)));
+      const data = loadedProducts.filter((product) => productIds.has(String(product.id)));
 
       setProductos(data);
 
@@ -236,9 +228,15 @@ function RealizarPedido() {
         };
       });
       setPedido(pedidoInicial);
+
+      unsubscribe = subscribeActiveProducts((activeProducts) => {
+        const nextProducts = activeProducts.filter((product) => productIds.has(String(product.id)));
+        setProductos(nextProducts);
+      });
     };
 
     fetchProductosProveedor();
+    return () => unsubscribe();
   }, [proveedorSeleccionado, calcularRecomendadoFinal]);
 
 

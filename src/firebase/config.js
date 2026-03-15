@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
@@ -15,7 +15,9 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 // Inicializar servicios
-const db = getFirestore(app);
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache(),
+});
 const auth = getAuth(app);
 
 // Exportar para usar en toda la app

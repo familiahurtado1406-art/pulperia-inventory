@@ -2,12 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import {
   doc,
-  getDocs,
   increment,
-  query,
   serverTimestamp,
   writeBatch,
-  where,
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import {
@@ -19,6 +16,11 @@ import {
   upsertProviderProductLink,
 } from "../services/providerProductService";
 import { confirmToast } from "../services/confirmToast";
+import {
+  fetchActiveProducts,
+  subscribeActiveProducts,
+  subscribeUserCollection,
+} from "../services/realtimeFirestoreService";
 import { userCollection, userDoc, userSubcollection } from "../services/userScopedFirestore";
 
 function RecibirPedidoPage() {
@@ -37,7 +39,7 @@ function RecibirPedidoPage() {
   const [medidaEntrada, setMedidaEntrada] = useState("base");
   const [cantidad, setCantidad] = useState("");
   const [cantidadBaseAdicional, setCantidadBaseAdicional] = useState("");
-  const [tipoImpuesto, setTipoImpuesto] = useState("NO_IMPUESTO");
+  const [impuestosSeleccionados, setImpuestosSeleccionados] = useState([]);
   const [costoTotal, setCostoTotal] = useState("");
   const [margen, setMargen] = useState("20");
   const [precioVentaUnidadManual, setPrecioVentaUnidadManual] = useState("");
@@ -53,11 +55,8 @@ function RecibirPedidoPage() {
   );
 
   useEffect(() => {
-    const init = async () => {
-      const snapshot = await getDocs(userCollection("proveedores"));
-      setSuppliers(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
-    };
-    init();
+    const unsubscribe = subscribeUserCollection("proveedores", setSuppliers);
+    return () => unsubscribe();
   }, []);
 
   const cantidadBaseActual = useMemo(() => {
@@ -78,14 +77,29 @@ function RecibirPedidoPage() {
   const ivaMonto = useMemo(() => {
     const subtotal = Number(costoTotal || 0);
     if (subtotal <= 0) return 0;
-    return tipoImpuesto === "IVA" ? Number((subtotal * 0.15).toFixed(2)) : 0;
-  }, [costoTotal, tipoImpuesto]);
+    return impuestosSeleccionados.includes("IVA")
+      ? Number((subtotal * 0.15).toFixed(2))
+      : 0;
+  }, [costoTotal, impuestosSeleccionados]);
+
+  const iscMonto = useMemo(() => {
+    const subtotal = Number(costoTotal || 0);
+    if (subtotal <= 0) return 0;
+    return impuestosSeleccionados.includes("ISC")
+      ? Number((subtotal * 0.15).toFixed(2))
+      : 0;
+  }, [costoTotal, impuestosSeleccionados]);
+
+  const totalImpuestos = useMemo(
+    () => Number((ivaMonto + iscMonto).toFixed(2)),
+    [ivaMonto, iscMonto]
+  );
 
   const costoConImpuesto = useMemo(() => {
     const subtotal = Number(costoTotal || 0);
     if (subtotal <= 0) return 0;
-    return Number((subtotal + ivaMonto).toFixed(2));
-  }, [costoTotal, ivaMonto]);
+    return Number((subtotal + totalImpuestos).toFixed(2));
+  }, [costoTotal, totalImpuestos]);
 
   const costoUnitario = useMemo(() => {
     const c = Number(cantidadBaseActual || 0);
@@ -190,17 +204,44 @@ function RecibirPedidoPage() {
     () => receivedItems.reduce((acc, item) => acc + Number(item.ivaMonto || 0), 0),
     [receivedItems]
   );
+  const totalIscPagado = useMemo(
+    () => receivedItems.reduce((acc, item) => acc + Number(item.iscMonto || 0), 0),
+    [receivedItems]
+  );
+
+  const normalizeImpuestos = (item) => {
+    if (Array.isArray(item?.impuestos)) return item.impuestos.filter(Boolean);
+    if (item?.impuestoTipo === "IVA_ISC") return ["IVA", "ISC"];
+    if (item?.impuestoTipo === "IVA") return ["IVA"];
+    if (item?.impuestoTipo === "ISC") return ["ISC"];
+    return [];
+  };
+
+  const getImpuestoTipoLegacy = (impuestos) => {
+    if (impuestos.includes("IVA") && impuestos.includes("ISC")) return "IVA_ISC";
+    if (impuestos.includes("IVA")) return "IVA";
+    if (impuestos.includes("ISC")) return "ISC";
+    return "NO_IMPUESTO";
+  };
+
+  const toggleImpuesto = (impuesto) => {
+    setImpuestosSeleccionados((prev) =>
+      prev.includes(impuesto)
+        ? prev.filter((current) => current !== impuesto)
+        : [...prev, impuesto]
+    );
+  };
 
   const loadSupplierProducts = async (supplierId) => {
     if (!supplierId) {
       setSupplierProducts([]);
       setProviderLinkByProductId({});
-      return;
+      return () => {};
     }
 
-    const [links, snapshot] = await Promise.all([
+    const [links, products] = await Promise.all([
       getProviderProductLinksByProvider(supplierId),
-      getDocs(query(userCollection("products"), where("activo", "==", true))),
+      fetchActiveProducts(),
     ]);
     const linksMap = links.reduce((acc, link) => {
       const productId = String(link.productDocId || link.productoId || "");
@@ -210,12 +251,24 @@ function RecibirPedidoPage() {
     }, {});
     setProviderLinkByProductId(linksMap);
     const ids = new Set(links.map((link) => String(link.productDocId || link.productoId || "")));
-    setSupplierProducts(
-      snapshot.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .filter((product) => ids.has(String(product.id)))
-    );
+    setSupplierProducts(products.filter((product) => ids.has(String(product.id))));
+
+    const unsubscribe = subscribeActiveProducts((activeProducts) => {
+      setSupplierProducts(activeProducts.filter((product) => ids.has(String(product.id))));
+    });
+
+    return unsubscribe;
   };
+
+  useEffect(() => {
+    let unsubscribe = () => {};
+    const init = async () => {
+      unsubscribe = await loadSupplierProducts(selectedSupplier);
+    };
+    init();
+
+    return () => unsubscribe();
+  }, [selectedSupplier]);
 
   const handleSupplierChange = async (supplierId) => {
     setSelectedSupplier(supplierId);
@@ -223,7 +276,6 @@ function RecibirPedidoPage() {
       suppliers.find((supplier) => supplier.id === supplierId)?.nombre || supplierId || "";
     setSupplierSearch(supplierName);
     setShowSupplierSuggestions(false);
-    await loadSupplierProducts(supplierId);
   };
 
   const handleMargenChange = (nuevoMargen) => {
@@ -267,12 +319,13 @@ function RecibirPedidoPage() {
   const openProductModal = (product) => {
     const basePrice = Number(product.precioVentaBase ?? product.precioVenta ?? 0);
     setSelectedProduct(product);
+    setSearch("");
     setEditingItemIndex(null);
     setModoIngresoInventario("sumar");
     setMedidaEntrada("base");
     setCantidad("");
     setCantidadBaseAdicional("");
-    setTipoImpuesto("NO_IMPUESTO");
+    setImpuestosSeleccionados([]);
     setCostoTotal("");
     setMargen("20");
     setPrecioOriginal(basePrice);
@@ -315,7 +368,7 @@ function RecibirPedidoPage() {
     setMedidaEntrada(item.medidaEntrada || "base");
     setCantidad(String(Number(item.cantidadIngresada || 0)));
     setCantidadBaseAdicional(String(Number(item.cantidadBaseAdicional || 0)));
-    setTipoImpuesto(item.impuestoTipo || "NO_IMPUESTO");
+    setImpuestosSeleccionados(normalizeImpuestos(item));
     setCostoTotal(String(Number(item.costoSinImpuesto ?? item.totalFactura ?? 0)));
     setMargen(String(Number(item.margen || 0)));
     setPrecioOriginal(Number(item.precioVentaUnidad || 0));
@@ -396,8 +449,11 @@ function RecibirPedidoPage() {
       gananciaUnidad: gananciaUnidadFinal,
       costoSinImpuesto: Number(costoTotal || 0),
       totalFactura: Number(costoConImpuesto || 0),
-      impuestoTipo: tipoImpuesto,
+      impuestos: impuestosSeleccionados,
+      impuestoTipo: getImpuestoTipoLegacy(impuestosSeleccionados),
       ivaMonto,
+      iscMonto,
+      totalImpuestos,
       costoConImpuesto,
       proveedorId: supplierId,
       actualizarPrecio: Math.abs(precioFinalNum - Number(precioOriginal || 0)) > 0.009,
@@ -901,16 +957,28 @@ function RecibirPedidoPage() {
             {showCostoDetalles && (
               <>
                 <div className="input-group">
-                  <label htmlFor="tipo-impuesto">Impuesto</label>
-                  <select
-                    id="tipo-impuesto"
+                  <label>Impuestos</label>
+                  <div
                     className="input-modern"
-                    value={tipoImpuesto}
-                    onChange={(e) => setTipoImpuesto(e.target.value)}
+                    style={{ display: "flex", flexDirection: "column", gap: "10px" }}
                   >
-                    <option value="NO_IMPUESTO">NO IMPUESTO</option>
-                    <option value="IVA">IVA</option>
-                  </select>
+                    <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <input
+                        type="checkbox"
+                        checked={impuestosSeleccionados.includes("IVA")}
+                        onChange={() => toggleImpuesto("IVA")}
+                      />
+                      IVA (15%)
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <input
+                        type="checkbox"
+                        checked={impuestosSeleccionados.includes("ISC")}
+                        onChange={() => toggleImpuesto("ISC")}
+                      />
+                      ISC (15%)
+                    </label>
+                  </div>
                 </div>
 
                 <div className="input-group">
@@ -923,8 +991,8 @@ function RecibirPedidoPage() {
                     readOnly
                   />
                   <small>
-                    Calculado automaticamente segun el tipo de impuesto. IVA aplicado: C$
-                    {ivaMonto.toFixed(2)}
+                    Calculado automaticamente. IVA: C${ivaMonto.toFixed(2)} | ISC: C$
+                    {iscMonto.toFixed(2)} | Total impuestos: C${totalImpuestos.toFixed(2)}
                   </small>
                 </div>
               </>
@@ -1049,7 +1117,10 @@ function RecibirPedidoPage() {
           <div className="summary-card">
             <p>Total Invertido</p>
             <h3>C${totalInvertido.toFixed(2)}</h3>
-            <small>Incluye IVA. IVA pagado: C${totalIvaPagado.toFixed(2)}</small>
+            <small>
+              Incluye impuestos. IVA: C${totalIvaPagado.toFixed(2)} | ISC: C$
+              {totalIscPagado.toFixed(2)}
+            </small>
           </div>
           <div className="summary-card ganancia">
             <p>Ganancia Estimada</p>
@@ -1074,6 +1145,7 @@ function RecibirPedidoPage() {
                 <th>Ganancia Unidad</th>
                 <th>Ganancia Total</th>
                 <th>IVA</th>
+                <th>ISC</th>
                 <th>Total Factura</th>
                 <th>Acciones</th>
               </tr>
@@ -1101,6 +1173,7 @@ function RecibirPedidoPage() {
                     {(Number(item.gananciaUnidad || 0) * Number(item.cantidadBase || 0)).toFixed(2)}
                   </td>
                   <td>{Number(item.ivaMonto || 0).toFixed(2)}</td>
+                  <td>{Number(item.iscMonto || 0).toFixed(2)}</td>
                   <td>{item.totalFactura.toFixed(2)}</td>
                   <td>
                     <div style={{ display: "flex", gap: "8px" }}>

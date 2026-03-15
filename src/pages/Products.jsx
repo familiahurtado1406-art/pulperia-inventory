@@ -72,7 +72,7 @@ function Products() {
   const [variantName, setVariantName] = useState("");
   const [variantUnits, setVariantUnits] = useState("");
   const [variantDiscount, setVariantDiscount] = useState("10");
-  const [variantPriceManual, setVariantPriceManual] = useState("");
+  const [variantPriceInput, setVariantPriceInput] = useState("");
   const [variantBarcode, setVariantBarcode] = useState("");
 
   const [editingProduct, setEditingProduct] = useState(null);
@@ -118,6 +118,12 @@ function Products() {
     const baseTotal = baseUnitPrice * units;
     return Number((baseTotal * (1 - discount / 100)).toFixed(2));
   }, [variantUnits, precioVenta, variantDiscount]);
+  const variantBaseTotal = useMemo(() => {
+    const units = Number(variantUnits || 0);
+    const baseUnitPrice = Number(precioVenta || 0);
+    if (units <= 0 || baseUnitPrice <= 0) return 0;
+    return Number((baseUnitPrice * units).toFixed(2));
+  }, [variantUnits, precioVenta]);
 
   const fetchProducts = async () => {
     const [snapshot, proveedoresSnap, linksSnapA, linksSnapB, analytics] = await Promise.all([
@@ -273,16 +279,14 @@ function Products() {
     setVariantName("");
     setVariantUnits("");
     setVariantDiscount("10");
-    setVariantPriceManual("");
+    setVariantPriceInput("");
     setVariantBarcode("");
   };
 
   const handleAddVariant = () => {
     const name = variantName.trim();
     const units = Number(variantUnits || 0);
-    const price = Number(
-      variantPriceManual === "" ? variantPriceSuggested : variantPriceManual
-    );
+    const price = Number(variantPriceInput || variantPriceSuggested || 0);
     if (!name || units <= 0 || price <= 0) {
       toast.error("Completa nombre, unidades y precio de la presentacion");
       return;
@@ -726,6 +730,61 @@ function Products() {
               </div>
 
               <div className="form-section">
+                <h4>Costos y Precio</h4>
+                <div className="input-group">
+                  <label>Costo pack</label>
+                  <input
+                    type="number"
+                    className="input-modern"
+                    value={costoPack}
+                    onChange={(e) => setCostoPack(e.target.value)}
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label>Costo unitario base</label>
+                  <input
+                    type="number"
+                    className="input-modern"
+                    value={costoUnitario}
+                    onChange={(e) => setCostoUnitario(e.target.value)}
+                    readOnly={Number(costoPack || 0) > 0 && Number(unidadesPorInterna || 0) > 0}
+                    required
+                  />
+                  {Number(costoPack || 0) > 0 && Number(unidadesPorInterna || 0) > 0 && (
+                    <small>Calculado automaticamente segun pack.</small>
+                  )}
+                </div>
+
+                <div className="input-group">
+                  <label>Margen (%)</label>
+                  <div className="input-percent">
+                    <input
+                      className="input-modern"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={margen}
+                      onChange={(e) => handleMargenLibreChange(e.target.value)}
+                    />
+                    <span>%</span>
+                  </div>
+                  <small>Margen libre y sincronizado con el precio.</small>
+                </div>
+
+                <div className="input-group">
+                  <label>Precio de venta base</label>
+                  <input
+                    type="number"
+                    className="input-modern"
+                    value={precioVenta}
+                    onChange={(e) => handlePrecioVentaChange(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="form-section">
                 <h4>
                   <FaWarehouse className="section-icon" />
                   Control de Inventario
@@ -771,61 +830,6 @@ function Products() {
                     required
                   />
                   <small>Nivel ideal de inventario.</small>
-                </div>
-              </div>
-
-              <div className="form-section">
-                <h4>Costos y Precio</h4>
-                <div className="input-group">
-                  <label>Costo unitario base</label>
-                  <input
-                    type="number"
-                    className="input-modern"
-                    value={costoUnitario}
-                    onChange={(e) => setCostoUnitario(e.target.value)}
-                    readOnly={Number(costoPack || 0) > 0 && Number(unidadesPorInterna || 0) > 0}
-                    required
-                  />
-                  {Number(costoPack || 0) > 0 && Number(unidadesPorInterna || 0) > 0 && (
-                    <small>Calculado automaticamente segun pack.</small>
-                  )}
-                </div>
-
-                <div className="input-group">
-                  <label>Costo pack</label>
-                  <input
-                    type="number"
-                    className="input-modern"
-                    value={costoPack}
-                    onChange={(e) => setCostoPack(e.target.value)}
-                  />
-                </div>
-
-                <div className="input-group">
-                  <label>Margen (%)</label>
-                  <div className="input-percent">
-                    <input
-                      className="input-modern"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={margen}
-                      onChange={(e) => handleMargenLibreChange(e.target.value)}
-                    />
-                    <span>%</span>
-                  </div>
-                  <small>Margen libre y sincronizado con el precio.</small>
-                </div>
-
-                <div className="input-group">
-                  <label>Precio de venta base</label>
-                  <input
-                    type="number"
-                    className="input-modern"
-                    value={precioVenta}
-                    onChange={(e) => handlePrecioVentaChange(e.target.value)}
-                    required
-                  />
                 </div>
               </div>
 
@@ -1026,17 +1030,22 @@ function Products() {
             </div>
             <div className="input-group">
               <label>Precio sugerido</label>
-              <input className="input-modern" value={variantPriceSuggested} readOnly />
-            </div>
-            <div className="input-group">
-              <label>Precio final</label>
               <input
                 type="number"
                 className="input-modern"
-                value={variantPriceManual}
-                onChange={(e) => setVariantPriceManual(e.target.value)}
-                placeholder={String(variantPriceSuggested || 0)}
+                value={variantPriceInput === "" ? variantPriceSuggested : variantPriceInput}
+                onChange={(e) => {
+                  const nextValue = e.target.value;
+                  setVariantPriceInput(nextValue);
+
+                  const numericPrice = Number(nextValue || 0);
+                  if (variantBaseTotal > 0 && numericPrice > 0) {
+                    const nextDiscount = ((variantBaseTotal - numericPrice) / variantBaseTotal) * 100;
+                    setVariantDiscount(Number(nextDiscount.toFixed(2)).toString());
+                  }
+                }}
               />
+              <small>Editable. El descuento se recalcula automaticamente.</small>
             </div>
             <div className="input-group">
               <label>Codigo de barras (opcional)</label>

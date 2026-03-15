@@ -1,19 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   doc,
-  getDocs,
   increment,
-  query,
   serverTimestamp,
   writeBatch,
-  where,
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import useOverlayBack from "../hooks/useOverlayBack";
+import useNetworkStatus from "../hooks/useNetworkStatus";
 import { getStockBaseValue, registerInventoryChange } from "../services/inventoryHistoryService";
 import { readLocalCache, writeLocalCache } from "../services/localCacheService";
 import { syncProductMetrics } from "../services/productMetricsService";
+import { fetchActiveProducts, subscribeActiveProducts } from "../services/realtimeFirestoreService";
 import { userCollection, userDoc } from "../services/userScopedFirestore";
 
 const POS_PRODUCTS_CACHE_KEY = "pos_products_active";
@@ -41,6 +40,27 @@ const getProductVariants = (product) => {
 
 const formatCurrency = (value) => `C$ ${Number(value || 0).toFixed(2)}`;
 
+const formatQuarterValue = (numericValue) => {
+  const safeValue = Number(numericValue || 0);
+  const entero = Math.floor(safeValue);
+  const remainder = Number((safeValue - entero).toFixed(2));
+
+  if (Math.abs(remainder) < 0.001) return `${entero}`;
+  if (Math.abs(remainder - 0.25) < 0.001) return entero > 0 ? `${entero} 1/4` : "1/4";
+  if (Math.abs(remainder - 0.5) < 0.001) return entero > 0 ? `${entero} 1/2` : "1/2";
+  if (Math.abs(remainder - 0.75) < 0.001) return entero > 0 ? `${entero} 3/4` : "3/4";
+  return `${safeValue}`.replace(/\.0$/, "");
+};
+
+const formatPresetLabel = (value, measure = "UN") => {
+  const numericValue = Number(value || 0);
+  if (["LB", "LT"].includes(measure)) {
+    if (numericValue === 0.25) return "Un cuarto";
+    if (numericValue === 0.5) return "Media";
+  }
+  return formatQuantityLabel(value, measure);
+};
+
 const formatQuantityLabel = (value, measure = "UN") => {
   const numericValue = Number(value || 0);
   if (measure === "LB") {
@@ -49,6 +69,9 @@ const formatQuantityLabel = (value, measure = "UN") => {
     if (numericValue === 1) return "1";
     if (numericValue === 2) return "2";
     if (numericValue === 4) return "4";
+  }
+  if (measure === "LT") {
+    return formatQuarterValue(numericValue);
   }
   return `${numericValue}`.replace(/\.0$/, "");
 };
@@ -71,6 +94,7 @@ const createEmptyCart = (index = 1) => ({
 function PosPage() {
   const searchInputRef = useRef(null);
   const cashInputRef = useRef(null);
+  const isOnline = useNetworkStatus();
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState("");
   const [carts, setCarts] = useState([createEmptyCart(1)]);
@@ -104,24 +128,19 @@ function PosPage() {
     }
   }, [activeCartId, carts]);
 
-  const loadProducts = useCallback(async ({ forceRefresh = false } = {}) => {
-    if (!forceRefresh) {
-      const cachedProducts = readLocalCache(POS_PRODUCTS_CACHE_KEY, POS_PRODUCTS_CACHE_TTL);
-      if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
-        setProducts(cachedProducts);
-        return;
-      }
+  useEffect(() => {
+    const cachedProducts = readLocalCache(POS_PRODUCTS_CACHE_KEY, POS_PRODUCTS_CACHE_TTL);
+    if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
+      setProducts(cachedProducts);
     }
 
-    const snapshot = await getDocs(query(userCollection("products"), where("activo", "==", true)));
-    const loadedProducts = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
-    setProducts(loadedProducts);
-    writeLocalCache(POS_PRODUCTS_CACHE_KEY, loadedProducts);
-  }, []);
+    const unsubscribe = subscribeActiveProducts((loadedProducts) => {
+      setProducts(loadedProducts);
+      writeLocalCache(POS_PRODUCTS_CACHE_KEY, loadedProducts);
+    });
 
-  useEffect(() => {
-    loadProducts();
-  }, [loadProducts]);
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     if (!showSearchModal) return;
@@ -131,9 +150,15 @@ function PosPage() {
   }, [showSearchModal]);
 
   const handleRefreshProducts = async () => {
+    if (!isOnline) {
+      toast("Sin conexion. Usando productos guardados localmente.");
+      return;
+    }
     setIsRefreshingProducts(true);
     try {
-      await loadProducts({ forceRefresh: true });
+      const loadedProducts = await fetchActiveProducts();
+      setProducts(loadedProducts);
+      writeLocalCache(POS_PRODUCTS_CACHE_KEY, loadedProducts);
       toast.success("Productos actualizados");
     } catch (error) {
       console.error(error);
@@ -241,15 +266,7 @@ function PosPage() {
 
   const handleSelectProduct = (product, variant = null) => {
     const defaultVariant = variant || getDefaultVariant(product);
-    const usesVariableQuantity =
-      defaultVariant.id === "base" && ["LB", "LT", "YARDA"].includes(product.medidaBase || "UN");
-
-    if (usesVariableQuantity) {
-      openQuantityModal(product, defaultVariant);
-      return;
-    }
-
-    addToCart(product, defaultVariant, 1);
+    openQuantityModal(product, defaultVariant);
   };
 
   const handleConfirmVariableQuantity = () => {
@@ -496,7 +513,11 @@ function PosPage() {
       clearActiveCart();
       setReceivedCash("");
       closePaymentOverlay();
-      toast.success("Venta guardada correctamente");
+      toast.success(
+        isOnline
+          ? "Venta guardada correctamente"
+          : "Venta guardada offline. Se sincronizara cuando vuelva internet"
+      );
     } catch (error) {
       console.error(error);
       toast.error("Error guardando venta");
@@ -546,6 +567,22 @@ function PosPage() {
           {isRefreshingProducts ? "..." : "Refresh"}
         </button>
       </div>
+
+      {!isOnline && (
+        <div
+          style={{
+            background: "#fff7ed",
+            border: "1px solid #fed7aa",
+            borderRadius: "18px",
+            color: "#9a3412",
+            marginBottom: "18px",
+            padding: "12px 14px",
+          }}
+        >
+          <strong>Modo sin conexion.</strong> Puedes seguir vendiendo. Los cambios se sincronizaran
+          cuando vuelva internet.
+        </div>
+      )}
 
       <div
         style={{
@@ -1007,11 +1044,11 @@ function PosPage() {
               </div>
             </div>
 
-            {selectedMeasure === "LB" && (
+            {["LB", "LT"].includes(selectedMeasure) && (
               <>
                 <p style={{ color: "#6b7280", marginTop: "0" }}>Minimo granel: Un cuarto</p>
                 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "16px" }}>
-                  {[0.5, 1, 2, 4].map((preset) => (
+                  {[0.25, 0.5, 1, 2, 4].map((preset) => (
                     <button
                       key={preset}
                       type="button"
@@ -1022,7 +1059,7 @@ function PosPage() {
                         color: Number(quantityValue || 0) === preset ? "#1d4ed8" : undefined,
                       }}
                     >
-                      {formatQuantityLabel(preset, selectedMeasure)}
+                      {formatPresetLabel(preset, selectedMeasure)}
                     </button>
                   ))}
                 </div>

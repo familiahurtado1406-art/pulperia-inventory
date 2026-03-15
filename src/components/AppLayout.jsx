@@ -4,9 +4,11 @@ import { FaHome } from "react-icons/fa";
 import { Link, useNavigate } from "react-router-dom";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "../firebase/config";
+import useNetworkStatus from "../hooks/useNetworkStatus";
 
 export default function AppLayout({ title, children, onAdd, onRefresh }) {
   const navigate = useNavigate();
+  const isOnline = useNetworkStatus();
   const [openDrawer, setOpenDrawer] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [user, setUser] = useState(null);
@@ -42,6 +44,21 @@ export default function AppLayout({ title, children, onAdd, onRefresh }) {
         </button>
         <h1>{title}</h1>
         <div className="header-actions">
+          <span
+            style={{
+              alignItems: "center",
+              background: isOnline ? "rgba(220, 252, 231, 0.95)" : "rgba(254, 243, 199, 0.95)",
+              borderRadius: "999px",
+              color: isOnline ? "#15803d" : "#b45309",
+              display: "inline-flex",
+              fontSize: "12px",
+              fontWeight: 700,
+              marginRight: "8px",
+              padding: "6px 10px",
+            }}
+          >
+            {isOnline ? "Online" : "Sin conexion"}
+          </span>
           <button
             type="button"
             className="refresh-btn"
