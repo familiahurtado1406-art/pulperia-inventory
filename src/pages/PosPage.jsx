@@ -1,19 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  doc,
-  increment,
-  serverTimestamp,
-  writeBatch,
 } from "firebase/firestore";
-import { db } from "../firebase/config";
 import useOverlayBack from "../hooks/useOverlayBack";
 import useNetworkStatus from "../hooks/useNetworkStatus";
-import { getStockBaseValue, registerInventoryChange } from "../services/inventoryHistoryService";
+import { getStockBaseValue } from "../services/inventoryHistoryService";
 import { readLocalCache, writeLocalCache } from "../services/localCacheService";
-import { syncProductMetrics } from "../services/productMetricsService";
-import { fetchActiveProducts, subscribeActiveProducts } from "../services/realtimeFirestoreService";
-import { userCollection, userDoc } from "../services/userScopedFirestore";
+import { logAction } from "../services/logService";
+import { commitQueuedSale } from "../services/posSalesSyncService";
+import {
+  fetchActiveProducts,
+  getCachedActiveProducts,
+  subscribeActiveProducts,
+} from "../services/realtimeFirestoreService";
+import { getPendingSales, savePendingSale } from "../services/salesService";
+import { runSync } from "../services/syncEngine";
 
 const POS_PRODUCTS_CACHE_KEY = "pos_products_active";
 const POS_PRODUCTS_CACHE_TTL = 3 * 60 * 1000;
@@ -94,6 +95,7 @@ const createEmptyCart = (index = 1) => ({
 function PosPage() {
   const searchInputRef = useRef(null);
   const cashInputRef = useRef(null);
+  const isSyncingPendingSalesRef = useRef(false);
   const isOnline = useNetworkStatus();
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState("");
@@ -129,10 +131,20 @@ function PosPage() {
   }, [activeCartId, carts]);
 
   useEffect(() => {
-    const cachedProducts = readLocalCache(POS_PRODUCTS_CACHE_KEY, POS_PRODUCTS_CACHE_TTL);
-    if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
-      setProducts(cachedProducts);
-    }
+    const loadInitialProducts = async () => {
+      const cachedProducts = readLocalCache(POS_PRODUCTS_CACHE_KEY, POS_PRODUCTS_CACHE_TTL);
+      if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
+        setProducts(cachedProducts);
+        return;
+      }
+
+      const indexedProducts = await getCachedActiveProducts();
+      if (Array.isArray(indexedProducts) && indexedProducts.length > 0) {
+        setProducts(indexedProducts);
+      }
+    };
+
+    loadInitialProducts();
 
     const unsubscribe = subscribeActiveProducts((loadedProducts) => {
       setProducts(loadedProducts);
@@ -343,6 +355,68 @@ function PosPage() {
     );
   };
 
+  const buildSaleItems = (lines) =>
+    lines.map((line) => {
+      const qty = Number(line.qty || 0);
+      const unitsTotal = Number(line.unitsBase || 0) * qty;
+      const totalLine = Number((Number(line.price || 0) * qty).toFixed(2));
+      return {
+        productId: line.productId,
+        productoId: line.productoId,
+        nombre: line.name,
+        variantId: line.variantId,
+        variant: line.variantName,
+        qty,
+        unitsBase: Number(line.unitsBase || 0),
+        unidades: unitsTotal,
+        cantidadBase: unitsTotal,
+        medidaBase: line.medidaBase || "UN",
+        priceUnit: Number(line.price || 0),
+        total: totalLine,
+      };
+    });
+
+  const commitSaleToFirestore = useCallback(async ({
+    cart,
+    saleItems,
+    totalSale,
+    paymentMethodValue,
+    receivedCashValue,
+    changeValue,
+    emitTicketValue,
+    productSnapshots,
+  }) => {
+    await commitQueuedSale({
+      cart,
+      saleItems,
+      totalSale,
+      paymentMethod: paymentMethodValue,
+      receivedCash: receivedCashValue,
+      changeAmount: changeValue,
+      emitTicket: emitTicketValue,
+      productSnapshots: productSnapshots || products,
+    });
+  }, [products]);
+
+  useEffect(() => {
+    const syncPendingSales = async () => {
+      if (!isOnline || isSyncingPendingSalesRef.current) return;
+      isSyncingPendingSalesRef.current = true;
+      try {
+        const pendingSales = await getPendingSales();
+        if (pendingSales.length > 0) {
+          await runSync();
+        }
+      } catch (error) {
+        console.error("No se pudieron sincronizar ventas pendientes", error);
+      } finally {
+        isSyncingPendingSalesRef.current = false;
+      }
+    };
+
+    syncPendingSales();
+  }, [isOnline, commitSaleToFirestore]);
+
   const handleSaveSale = async () => {
     if (activeCartItems.length === 0) {
       toast.error("El carrito esta vacio");
@@ -381,119 +455,42 @@ function PosPage() {
 
     setIsSaving(true);
     try {
-      const batch = writeBatch(db);
-      const saleItems = activeCartItems.map((line) => {
-        const qty = Number(line.qty || 0);
-        const unitsTotal = Number(line.unitsBase || 0) * qty;
-        const totalLine = Number((Number(line.price || 0) * qty).toFixed(2));
-        return {
-          productId: line.productId,
-          productoId: line.productoId,
-          nombre: line.name,
-          variantId: line.variantId,
-          variant: line.variantName,
-          qty,
-          unitsBase: Number(line.unitsBase || 0),
-          unidades: unitsTotal,
-          cantidadBase: unitsTotal,
-          medidaBase: line.medidaBase || "UN",
-          priceUnit: Number(line.price || 0),
-          total: totalLine,
-        };
-      });
-
+      const saleItems = buildSaleItems(activeCartItems);
       const totalSale = Number(
         saleItems.reduce((acc, item) => acc + Number(item.total || 0), 0).toFixed(2)
       );
-
-      const saleRef = doc(userCollection("sales"));
-      batch.set(saleRef, {
-        date: serverTimestamp(),
-        total: totalSale,
-        paymentMethod,
-        cartId: activeCart.id,
-        cartLabel: activeCart.label,
-        receivedCash: paymentMethod === "cash" ? Number(receivedCash || 0) : null,
-        change: paymentMethod === "cash" ? changeAmount : null,
-        emitTicket,
-        items: saleItems,
-      });
-
-      const movementItems = [];
-      const historyTasks = [];
-      for (const item of saleItems) {
-        const product = productById[item.productId];
-        const stockAnterior = Number(getStockBaseValue(product) || 0);
-        const stockNuevo = Number((stockAnterior - Number(item.unidades || 0)).toFixed(4));
-
-        batch.update(userDoc("products", item.productId), {
-          stockBase: increment(-Number(item.unidades || 0)),
-          stockActual: increment(-Number(item.unidades || 0)),
-          ultimaActualizacion: serverTimestamp(),
+      if (isOnline) {
+        await commitSaleToFirestore({
+          cart: activeCart,
+          saleItems,
+          totalSale,
+          paymentMethodValue: paymentMethod,
+          receivedCashValue: receivedCash,
+          changeValue: changeAmount,
+          emitTicketValue: emitTicket,
+          productSnapshots: activeCartItems
+            .map((line) => productById[line.productId])
+            .filter(Boolean),
         });
-
-        historyTasks.push(registerInventoryChange({
-          product,
-          tipoMovimiento: "venta_pos",
-          stockAnterior,
-          stockNuevo,
-          referenciaId: saleRef.id,
-        }));
-
-        movementItems.push({
-          productDocId: item.productId,
-          productoId: item.productoId,
-          nombre: item.nombre,
-          variant: item.variant,
-          qty: item.qty,
-          unidades: item.unidades,
-          cantidadBase: item.cantidadBase,
-          medidaBase: item.medidaBase,
-          priceUnit: item.priceUnit,
-          total: item.total,
+      } else {
+        await savePendingSale({
+          cart: activeCart,
+          saleItems,
+          totalSale,
+          paymentMethod,
+          receivedCash: paymentMethod === "cash" ? Number(receivedCash || 0) : null,
+          changeAmount: paymentMethod === "cash" ? changeAmount : null,
+          emitTicket,
+          productSnapshots: activeCartItems
+            .map((line) => productById[line.productId])
+            .filter(Boolean),
         });
-
-        const inventoryMovementRef = doc(userCollection("inventory_movements"));
-        batch.set(inventoryMovementRef, {
-          productId: item.productId,
-          productoId: item.productoId,
-          type: "salida",
-          tipoMovimiento: "salida_venta",
-          cantidadBase: Number(item.cantidadBase || 0),
-          unidades: Number(item.unidades || 0),
-          medidaBase: item.medidaBase,
-          referenceId: saleRef.id,
-          source: "pos",
-          priceUnit: Number(item.priceUnit || 0),
-          total: Number(item.total || 0),
-          variant: item.variant || null,
-          createdAt: serverTimestamp(),
+        await logAction({
+          type: "SALE_SAVED_OFFLINE",
+          cartId: activeCart.id,
+          total: totalSale,
         });
       }
-
-      const movimientoRef = doc(userCollection("movimientos"));
-      batch.set(movimientoRef, {
-        type: "salida",
-        createdAt: serverTimestamp(),
-        saleId: saleRef.id,
-        cartId: activeCart.id,
-        cartLabel: activeCart.label,
-        paymentMethod,
-        total: totalSale,
-        items: movementItems,
-      });
-      await batch.commit();
-
-      const productIdsToSync = [...new Set(saleItems.map((item) => String(item.productId || "")).filter(Boolean))];
-      Promise.allSettled([
-        ...historyTasks,
-        syncProductMetrics({ productIds: productIdsToSync }),
-      ]).then((historyResults) => {
-        const hasHistoryErrors = historyResults.some((result) => result.status === "rejected");
-        if (hasHistoryErrors) {
-          console.error("Errores en historial de cambios de POS", { historyResults });
-        }
-      });
 
       setProducts((prev) =>
         prev.map((product) => {

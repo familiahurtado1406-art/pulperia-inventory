@@ -1,29 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import {
-  doc,
-  increment,
-  serverTimestamp,
-  writeBatch,
-} from "firebase/firestore";
-import { db } from "../firebase/config";
+import useNetworkStatus from "../hooks/useNetworkStatus";
 import {
   getStockBaseValue,
-  registerInventoryChange,
 } from "../services/inventoryHistoryService";
 import {
   getProviderProductLinksByProvider,
-  upsertProviderProductLink,
 } from "../services/providerProductService";
 import { confirmToast } from "../services/confirmToast";
 import {
   fetchActiveProducts,
+  getCachedProviders,
   subscribeActiveProducts,
-  subscribeUserCollection,
+  subscribeProviders,
 } from "../services/realtimeFirestoreService";
-import { userCollection, userDoc, userSubcollection } from "../services/userScopedFirestore";
+import { LOCAL_STORES, putStoreItem } from "../services/localDB";
+import { savePendingReceipt } from "../services/receiptService";
+import { runSync } from "../services/syncEngine";
 
 function RecibirPedidoPage() {
+  const isOnline = useNetworkStatus();
   const [suppliers, setSuppliers] = useState([]);
   const [selectedSupplier, setSelectedSupplier] = useState("");
   const [supplierSearch, setSupplierSearch] = useState("");
@@ -55,7 +51,15 @@ function RecibirPedidoPage() {
   );
 
   useEffect(() => {
-    const unsubscribe = subscribeUserCollection("proveedores", setSuppliers);
+    const loadCachedProviders = async () => {
+      const cachedSuppliers = await getCachedProviders();
+      if (cachedSuppliers.length > 0) {
+        setSuppliers(cachedSuppliers);
+      }
+    };
+    loadCachedProviders();
+
+    const unsubscribe = subscribeProviders(setSuppliers);
     return () => unsubscribe();
   }, []);
 
@@ -564,7 +568,6 @@ function RecibirPedidoPage() {
     setIsSavingPedido(true);
 
     try {
-      const batch = writeBatch(db);
       const supplierName =
         suppliers.find((supplier) => supplier.id === selectedSupplier)?.nombre ||
         selectedSupplier;
@@ -572,142 +575,59 @@ function RecibirPedidoPage() {
         acc[product.id] = getStockBaseValue(product);
         return acc;
       }, {});
-      const movementItems = [];
-      const historyTasks = [];
-      const providerLinkTasks = [];
+      await savePendingReceipt({
+        selectedSupplier,
+        supplierName,
+        receivedItems,
+        currentStockByProduct,
+      });
 
-      for (const item of receivedItems) {
+      const updatesById = {};
+      receivedItems.forEach((item) => {
         const stockAnterior = Number(currentStockByProduct[item.productDocId] || 0);
         const cantidadBase = Number(item.cantidadBase || 0);
         const modoIngreso = item.modoIngresoInventario || "sumar";
         const stockNuevo =
           modoIngreso === "desde_cero" ? cantidadBase : stockAnterior + cantidadBase;
-
-        const updatePayload = {
-          unidadesUltimaCompra: Number(item.unidadesUltimaCompra),
-          costoUnitarioBase: Number(item.costoUnitario),
-          costoUnitario: Number(item.costoUnitario),
-          ultimaActualizacion: serverTimestamp(),
-        };
-        if (modoIngreso === "desde_cero") {
-          updatePayload.stockBase = Number(cantidadBase);
-          updatePayload.stockActual = Number(cantidadBase);
-        } else {
-          updatePayload.stockBase = increment(cantidadBase);
-          updatePayload.stockActual = increment(cantidadBase);
-        }
-
-        if (item.actualizarPrecio) {
-          updatePayload.margen = Number(item.margen);
-          updatePayload.precioVentaBase = Number(item.precioVentaUnidad);
-          updatePayload.precioVentaUnidad = Number(item.precioVentaUnidad);
-          updatePayload.gananciaUnidad = Number(item.gananciaUnidad);
-          updatePayload.precioVenta = Number(item.precioVentaUnidad);
-        }
-
-        batch.update(userDoc("products", item.productDocId), updatePayload);
-
-        const historialPrecioRef = doc(
-          userSubcollection("products", item.productDocId, "historialPrecios")
-        );
-        batch.set(historialPrecioRef, {
-          proveedorId: selectedSupplier,
-          proveedorNombre: supplierName,
+        updatesById[item.productDocId] = {
+          stockBase: stockNuevo,
+          stockActual: stockNuevo,
+          unidadesUltimaCompra: Number(item.unidadesUltimaCompra || 0),
           costoUnitarioBase: Number(item.costoUnitario || 0),
-          fecha: serverTimestamp(),
-        });
-        const priceHistoryRef = doc(userCollection("priceHistory"));
-        batch.set(priceHistoryRef, {
-          productId: item.productDocId,
-          providerId: selectedSupplier,
-          fecha: serverTimestamp(),
           costoUnitario: Number(item.costoUnitario || 0),
-          cantidad: Number(item.cantidadBase || 0),
-          ordenId: null,
-        });
-
-        const inventoryMovementRef = doc(userCollection("inventory_movements"));
-        batch.set(inventoryMovementRef, {
-          productId: item.productDocId,
-          productoId: item.productDocId,
-          type: "entrada",
-          tipoMovimiento: "entrada_compra",
-          cantidadBase: Number(item.cantidadBase || 0),
-          unidades: Number(item.cantidadBase || 0),
-          medidaBase: item.medidaBase || "UN",
-          providerId: selectedSupplier,
-          referenceId: null,
-          source: "recibir_pedido",
-          priceUnit: Number(item.costoUnitario || 0),
-          total: Number(item.costoConImpuesto ?? item.totalFactura ?? 0),
-          variant: null,
-          createdAt: serverTimestamp(),
-        });
-
-        historyTasks.push(
-          registerInventoryChange({
-            product: {
-              id: item.productDocId,
-              productoId: item.productDocId,
-              nombre: item.nombre,
-            },
-            tipoMovimiento: "recibir_pedido",
-            stockAnterior,
-            stockNuevo,
-          })
-        );
-
-        providerLinkTasks.push(
-          upsertProviderProductLink({
-          productDocId: item.productDocId,
-          productoId: item.productDocId,
-          proveedorId: selectedSupplier,
-          proveedorNombre: supplierName,
-          costoUnitario: Number(item.costoUnitario || 0),
-          costoPack: null,
-          activo: true,
-          })
-        );
-
-        currentStockByProduct[item.productDocId] = stockNuevo;
-        movementItems.push({
-          ...item,
-          tipo: "entrada",
-          detalle: item.detalleIngreso,
-          unidades: cantidadBase,
-          modo: modoIngreso,
-          stockAnterior,
-          stockNuevo,
-          costoUnitario: Number(item.costoUnitario || 0),
-        });
-      }
-
-      const movimientoRef = doc(userCollection("movimientos"));
-      batch.set(movimientoRef, {
-        type: "entrada",
-        supplierId: selectedSupplier,
-        items: movementItems,
-        createdAt: serverTimestamp(),
+          ...(item.actualizarPrecio
+            ? {
+                margen: Number(item.margen),
+                precioVentaBase: Number(item.precioVentaUnidad),
+                precioVentaUnidad: Number(item.precioVentaUnidad),
+                gananciaUnidad: Number(item.gananciaUnidad),
+                precioVenta: Number(item.precioVentaUnidad),
+              }
+            : {}),
+        };
       });
-      await batch.commit();
 
-      const historyResults = await Promise.allSettled(historyTasks);
-      const providerResults = await Promise.allSettled(providerLinkTasks);
-      const hasBackgroundErrors = [...historyResults, ...providerResults].some(
-        (result) => result.status === "rejected"
+      await Promise.all(
+        Object.entries(updatesById).map(([productId, payload]) =>
+          putStoreItem(LOCAL_STORES.products, {
+            ...(supplierProducts.find((product) => product.id === productId) || { id: productId }),
+            id: productId,
+            ...payload,
+          })
+        )
       );
-      if (hasBackgroundErrors) {
-        console.error("Errores en tareas secundarias de guardado", {
-          historyResults,
-          providerResults,
+
+      if (isOnline) {
+        runSync().catch((error) => {
+          console.error("No se pudo sincronizar el pedido recibido", error);
         });
       }
 
       setReceivedItems([]);
       toast.success(
-        hasBackgroundErrors
-          ? "Pedido guardado (con algunas tareas secundarias pendientes)"
-          : "Pedido registrado correctamente"
+        isOnline
+          ? "Pedido registrado correctamente"
+          : "Pedido guardado offline y pendiente de sincronizar"
       );
       await loadSupplierProducts(selectedSupplier);
     } catch (error) {

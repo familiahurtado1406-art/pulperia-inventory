@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import Dashboard from "./pages/Dashboard";
@@ -16,8 +17,23 @@ import EntregasHoyPage from "./pages/EntregasHoyPage";
 import PosPage from "./pages/PosPage";
 import Login from "./pages/Login";
 import ProtectedRoute from "./components/ProtectedRoute";
+import { runSync } from "./services/syncEngine";
 
 function App() {
+  useEffect(() => {
+    const handleOnline = () => {
+      runSync().catch((error) => {
+        console.error("No se pudo ejecutar la sincronizacion global", error);
+      });
+    };
+
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+    };
+  }, []);
+
   return (
     <div className="app-shell">
       <Toaster position="top-center" />

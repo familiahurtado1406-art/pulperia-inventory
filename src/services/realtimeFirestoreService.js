@@ -1,4 +1,5 @@
 import { getDocs, onSnapshot, query, where } from "firebase/firestore";
+import { LOCAL_STORES, getAllStoreItems, replaceStoreItems } from "./localDB";
 import { userCollection } from "./userScopedFirestore";
 
 const mapSnapshotDocs = (snapshot) =>
@@ -18,10 +19,33 @@ export const subscribeUserCollection = (collectionName, callback, ...constraints
   });
 };
 
+export const subscribeProviders = (callback) =>
+  subscribeUserCollection("proveedores", async (providers) => {
+    await replaceStoreItems(LOCAL_STORES.providers, providers);
+    callback(providers);
+  });
+
 export const subscribeActiveProducts = (callback) =>
-  subscribeUserCollection("products", callback, where("activo", "==", true));
+  subscribeUserCollection("products", async (products) => {
+    await replaceStoreItems(LOCAL_STORES.products, products);
+    callback(products);
+  }, where("activo", "==", true));
 
 export const fetchActiveProducts = async () => {
-  const snapshot = await getDocs(query(userCollection("products"), where("activo", "==", true)));
-  return mapSnapshotDocs(snapshot);
+  try {
+    const snapshot = await getDocs(query(userCollection("products"), where("activo", "==", true)));
+    const products = mapSnapshotDocs(snapshot);
+    await replaceStoreItems(LOCAL_STORES.products, products);
+    return products;
+  } catch (error) {
+    const cachedProducts = await getAllStoreItems(LOCAL_STORES.products);
+    if (cachedProducts.length > 0) {
+      return cachedProducts;
+    }
+    throw error;
+  }
 };
+
+export const getCachedActiveProducts = async () => getAllStoreItems(LOCAL_STORES.products);
+
+export const getCachedProviders = async () => getAllStoreItems(LOCAL_STORES.providers);

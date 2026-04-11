@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PulperiaInventory</string>
+    <string name="title_activity_main">PulperiaInventory</string>
+    <string name="package_name">com.pulperia.inventory</string>
+    <string name="custom_url_scheme">com.pulperia.inventory</string>
+</resources>

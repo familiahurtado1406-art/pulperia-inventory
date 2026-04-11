@@ -1,20 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { updateDoc } from "firebase/firestore";
-import {
-  getStockBaseValue,
-  registerInventoryChange,
-} from "../services/inventoryHistoryService";
+import useNetworkStatus from "../hooks/useNetworkStatus";
+import { savePendingCountBatch } from "../services/countService";
+import { getStockBaseValue } from "../services/inventoryHistoryService";
+import { LOCAL_STORES, putStoreItem } from "../services/localDB";
 import { getProviderProductLinksByProvider } from "../services/providerProductService";
-import { syncProductMetrics } from "../services/productMetricsService";
 import {
   fetchActiveProducts,
+  getCachedProviders,
   subscribeActiveProducts,
-  subscribeUserCollection,
+  subscribeProviders,
 } from "../services/realtimeFirestoreService";
-import { userDoc } from "../services/userScopedFirestore";
+import { runSync } from "../services/syncEngine";
 
 function Conteo() {
+  const isOnline = useNetworkStatus();
   const [products, setProducts] = useState([]);
   const [proveedores, setProveedores] = useState([]);
   const [selectedProveedorId, setSelectedProveedorId] = useState("");
@@ -36,7 +36,15 @@ function Conteo() {
     Number(product.unidadesPorInterna ?? product.unidadesPorPack ?? 0);
 
   useEffect(() => {
-    const unsubscribe = subscribeUserCollection("proveedores", setProveedores);
+    const loadCachedProviders = async () => {
+      const cachedProviders = await getCachedProviders();
+      if (cachedProviders.length > 0) {
+        setProveedores(cachedProviders);
+      }
+    };
+    loadCachedProviders();
+
+    const unsubscribe = subscribeProviders(setProveedores);
     return () => unsubscribe();
   }, []);
 
@@ -226,25 +234,27 @@ function Conteo() {
     setIsSavingAll(true);
     try {
       const updatesById = {};
-      for (const product of modifiedProducts) {
+      const queuedItems = modifiedProducts.map((product) => {
         const { totalBase } = getConteoCalculado(product);
         const equivalenteBase = Number(totalBase || 0);
         const stockAnterior = Number(getStockBase(product) || 0);
         const targetCollection =
           productCollectionById[product.id] || "products";
-
-        await updateDoc(userDoc(targetCollection, product.id), {
-          stockBase: equivalenteBase,
-          stockActual: equivalenteBase,
-        });
-        await registerInventoryChange({
+        updatesById[product.id] = equivalenteBase;
+        return {
+          productId: product.id,
           product,
-          tipoMovimiento: "conteo",
           stockAnterior,
           stockNuevo: equivalenteBase,
-        });
-        updatesById[product.id] = equivalenteBase;
-      }
+          targetCollection,
+        };
+      });
+
+      await savePendingCountBatch({
+        proveedorId: selectedProveedorId,
+        proveedorNombre: selectedProveedor?.nombre || selectedProveedorId,
+        items: queuedItems,
+      });
 
       setProducts((prev) =>
         prev.map((product) =>
@@ -257,12 +267,25 @@ function Conteo() {
               },
         ),
       );
-      const productIdsToSync = Object.keys(updatesById);
-      Promise.resolve(syncProductMetrics({ productIds: productIdsToSync })).catch((error) => {
-        console.error("No se pudo actualizar product_metrics tras conteo", error);
-      });
+      await Promise.all(
+        modifiedProducts.map((product) =>
+          putStoreItem(LOCAL_STORES.products, {
+            ...product,
+            stockBase: updatesById[product.id],
+            stockActual: updatesById[product.id],
+          })
+        )
+      );
+
+      if (isOnline) {
+        runSync().catch((error) => {
+          console.error("No se pudo sincronizar conteo pendiente", error);
+        });
+      }
       toast.success(
-        `Conteo guardado: ${modifiedProducts.length} productos actualizados`,
+        isOnline
+          ? `Conteo guardado: ${modifiedProducts.length} productos actualizados`
+          : `Conteo guardado offline: ${modifiedProducts.length} productos pendientes de sincronizar`,
       );
     } catch (error) {
       console.error(error);
